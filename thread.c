@@ -982,40 +982,9 @@ static void state_get_in_key(struct thread *t, struct conn *conn)
 	}
 }
 
-static void state_del_set_out_syn(struct thread *t, struct conn *conn)
-{
-	debug_printf("CONN_STATE_DEL_SET_OUT_SYN:\n");
-
-	if (conn_full_write_byte(t, conn, E_NONE))
-		state_change_to_in_value_size(t, conn);
-}
-
 static bool cmd_del_non_block(struct conn *conn)
 {
 	return !!(conn->cmd_flag & CONN_DEL_FLAG_NON_BLOCK);
-}
-
-static bool cmd_del_for_set(struct conn *conn)
-{
-	return !!(conn->cmd_flag & CONN_DEL_FLAG_SET);
-}
-
-static void state_del_set_lock_wait(struct thread *t, struct conn *conn)
-{
-	debug_printf("CONN_STATE_DEL_SET_LOCK_WAIT:\n");
-
-	if (!kv_down_to_one_ref(conn->kv)) {
-		if (cmd_del_non_block(conn)) {
-			kv_unlock(conn->kv);
-			kv_return(t, conn);
-			state_change_to_out_errno(t, conn, E_DEL_WILL_BLOCK);
-		}
-		return;
-	}
-
-	kv_val_free(t, conn->kv);
-	conn->state = CONN_STATE_DEL_SET_OUT_SYN;
-	state_del_set_out_syn(t, conn);
 }
 
 static void state_del_lock_kv(struct thread *t, struct conn *conn)
@@ -1028,20 +997,11 @@ static void state_del_lock_kv(struct thread *t, struct conn *conn)
 		return;
 	}
 
-	if (cmd_del_for_set(conn)) {
-		if (conn->kv == NULL)
-			kv_new_and_borrow(t, conn);
-
+	if(conn->kv) {
 		kv_lock(conn->kv);
-		conn->state = CONN_STATE_DEL_SET_LOCK_WAIT;
-		state_del_set_lock_wait(t, conn);
-	} else {
-		if(conn->kv) {
-			kv_lock(conn->kv);
-			kv_return(t, conn);
-		}
-		state_change_to_out_errno(t, conn, E_NONE);
+		kv_return(t, conn);
 	}
+	state_change_to_out_errno(t, conn, E_NONE);
 }
 
 static void state_del_in_key(struct thread *t, struct conn *conn)
@@ -1142,13 +1102,6 @@ static void process_conn(struct thread *t, struct conn *conn)
 		break;
 	case CONN_STATE_DEL_LOCK_KV:
 		state_del_lock_kv(t, conn);
-		break;
-
-	case CONN_STATE_DEL_SET_LOCK_WAIT:
-		state_del_set_lock_wait(t, conn);
-		break;
-	case CONN_STATE_DEL_SET_OUT_SYN:
-		state_del_set_out_syn(t, conn);
 		break;
 
 	case CONN_TIME_LIMIT_STATE_IN_VALUE_SIZE:

@@ -120,7 +120,7 @@ SET
 	[CMD] [  value   ] [ERRNO]
 	      [value-size]
 
-XXXSET
+GET_SET
 ------
 ::
 
@@ -143,17 +143,10 @@ GET OR SET
 ::
 
 	      [[errno] == E_MISS]
-	[GET] [     XXXSET      ]
+	[GET] [     GET_SET     ]
 
 DEL
 ---
 ::
 
 	[CMD] [ERRNO]
-
-DEL FOR SET
------------
-::
-
-	      [[errno] == E_NONE]
-	[DEL] [     XXXSET      ]
