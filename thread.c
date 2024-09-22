@@ -539,7 +539,7 @@ static bool __blocked_or_freed(struct thread *t, struct conn *conn, ssize_t n)
 	if (n > 0)
 		return false;
 
-	if ((n == -1 && errno == EWOULDBLOCK))
+	if (n == -1 && errno == EWOULDBLOCK)
 		conn_blocked(t, conn);
 	else
 		free_conn(t, conn);

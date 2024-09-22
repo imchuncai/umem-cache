@@ -76,25 +76,13 @@ static void must_bind(int sockfd, const struct sockaddr * addr, socklen_t len)
 }
 
 /**
- * nonblock - Make @sockfd non-blocking
- * 
- * @return: true on success, false on failure
- */
-static bool nonblock(int sockfd)
-{
-	int ret = fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFL) | O_NONBLOCK);
-	return ret != -1;
-}
-
-/**
  * must_listen - Create socket and listen for connections on it or abort()
  * on failure
  */
 static int must_listen()
 {
-	int sockfd = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+	int sockfd = socket(AF_INET6, SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
 	must(sockfd != -1);
-	must(nonblock(sockfd));
 
 	int opt = 1;
 	must_setsockopt(sockfd, IPPROTO_IPV6, IPV6_V6ONLY, &opt, sizeof(opt));
@@ -128,7 +116,7 @@ static int must_listen()
 static void accept_new_conn(int sockfd)
 {
 	while (true) {
-		int fd = accept(sockfd, NULL, NULL);
+		int fd = accept4(sockfd, NULL, NULL, SOCK_NONBLOCK);
 		if (fd != -1)
 			conn_accept(fd);
 		else if (errno == EWOULDBLOCK)

@@ -2,7 +2,7 @@
 # Copyright (C) 2024, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 CFLAGS = *.c -O3 -g -Wall -Wextra -Wno-implicit-fallthrough -flto=auto	       \
-	-fwhole-program -fshort-enums -o umem-cache
+	-fwhole-program -fshort-enums -D_GNU_SOURCE -o umem-cache
 
 GNU23_CFLAGS = $(CFLAGS) -std=gnu23
 

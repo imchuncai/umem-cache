@@ -66,17 +66,6 @@ static void main_epoll_del(struct conn *conn)
 }
 
 /**
- * nonblock - Make @sockfd non-blocking
- * 
- * @return: true on success, false on failure
- */
-static bool nonblock(int sockfd)
-{
-	int ret = fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFL) | O_NONBLOCK);
-	return ret != -1;
-}
-
-/**
  * send_errno - Write @e to @sockfd
  * 
  * Note: if it is the first write to @sockfd, the write won't block
@@ -115,11 +104,6 @@ void conn_free_before_dispatched(struct conn *conn, enum umem_cache_errno e)
  */
 void conn_accept(int sockfd)
 {
-	if (!nonblock(sockfd)) {
-		free_before_accept(sockfd, E_CONNECT_KILL);
-		return;
-	}
-
 	struct conn *conn = conn_malloc();
 	if (conn == NULL) {
 		free_before_accept(sockfd, E_CONNECT_TOO_MANY);
