@@ -17,8 +17,6 @@ enum umem_cache_errno {
 
 	E_SET_WILL_BLOCK	= E_WILL_BLOCK,
 	E_SET_NOMEM		= E_NOMEM,
-
-	E_DEL_WILL_BLOCK	= E_WILL_BLOCK,
 };
 
 #endif

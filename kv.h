@@ -102,6 +102,7 @@ static_assert(sizeof(union value) == 48);
  * borrower will check this time. We can set TCP_USER_TIMEOUT for write, so tcp
  * write will not lock a kv forever. UINT64_MAX means expire time is not setted.
  * @lock_hit: count lock hit times, designed to reduce timenow() call
+ * @delete: if kv is marked for deletion
  * @locked: if kv is locked for modifying. Any access to this kv will hang until
  * the lock is unlocked. Note that if a kv has no references and is still
  * locked, it will be deleted.
@@ -122,6 +123,7 @@ struct kv {
 	uint64_t lock_expire_time;
 	unsigned char lock_hit;
 	bool locked;
+	bool delete;
 	unsigned char slab_offset;
 	bool hval_allocated;
 	unsigned char hval_cache_i;
@@ -140,6 +142,7 @@ bool kv_no_ref(const struct kv *kv);
 bool kv_down_to_one_ref(const struct kv *kv);
 void kv_lock(struct kv *kv);
 void kv_unlock(struct kv *kv);
+void kv_delete(struct kv *kv);
 bool kv_lock_expired(struct kv *kv);
 void value_migrate(struct slab_obj_offset soo_from,
 		   struct slab_obj_offset soo_to, uint32_t size);

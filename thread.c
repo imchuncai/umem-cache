@@ -186,12 +186,9 @@ static void kv_return(struct thread *t, struct conn *conn)
 	assert(conn->kv);
 	hlist_del(&conn->kv_ref_node);
 
-	/**
-	 * A conn locked the kv and returned without unlocking it, either due
-	 * to a socket error or intentionally. The kv may not be touched, free
-	 * it anyway.
-	 */
-	if (conn->kv->locked && kv_no_ref(conn->kv))
+	/* A socket error can cause a kv to return without unlocking.
+	The kv may not be touched, free it anyway. */
+	if ((conn->kv->locked || conn->kv->delete) && kv_no_ref(conn->kv))
 		kv_free(t, conn->kv);
 
 	conn->kv = NULL;
@@ -262,8 +259,7 @@ static void kv_force_free(struct thread *t, struct kv *kv)
 		return;
 	}
 
-	if (!kv->locked)
-		kv_lock(kv);
+	kv_delete(kv);
 
 	struct hlist_node *curr, *temp;
 	hlist_for_each_safe(curr, temp, &kv->ref_conn_list) {
@@ -299,6 +295,25 @@ static bool kv_borrow(struct thread *t, struct conn *conn)
 		kv_touch(t, kv);
 	}
 	return true;
+}
+
+/**
+ * __kv_delete - Delete kv for @conn
+ * 
+ * Note: caller should make sure key is readed from client
+ * Note: the deletion will be delayed if someone is still using it
+ */
+static void __kv_delete(struct thread *t, struct conn *conn)
+{
+	assert(conn->kv == NULL);
+
+	struct kv *kv = hash_get(&t->hash_table, &conn->key_n);
+	if (kv == NULL){
+	} else if (kv_no_ref(kv)) {
+		kv_free(t, kv);
+	} else {
+		kv_delete(kv);
+	}
 }
 
 static void grow_reclaim_bytes(struct thread *t)
@@ -982,35 +997,13 @@ static void state_get_in_key(struct thread *t, struct conn *conn)
 	}
 }
 
-static bool cmd_del_non_block(struct conn *conn)
-{
-	return !!(conn->cmd_flag & CONN_DEL_FLAG_NON_BLOCK);
-}
-
-static void state_del_lock_kv(struct thread *t, struct conn *conn)
-{
-	debug_printf("CONN_STATE_DEL_LOCK_KV:\n");
-
-	if (!kv_borrow(t, conn)) {
-		if (cmd_del_non_block(conn))
-			state_change_to_out_errno(t, conn, E_DEL_WILL_BLOCK);
-		return;
-	}
-
-	if(conn->kv) {
-		kv_lock(conn->kv);
-		kv_return(t, conn);
-	}
-	state_change_to_out_errno(t, conn, E_NONE);
-}
-
 static void state_del_in_key(struct thread *t, struct conn *conn)
 {
 	debug_printf("CONN_STATE_DEL_IN_KEY:\n");
 
 	if (__state_in_key(t, conn)) {
-		conn->state = CONN_STATE_DEL_LOCK_KV;
-		state_del_lock_kv(t, conn);
+		__kv_delete(t, conn);
+		state_change_to_out_errno(t, conn, E_NONE);
 	}
 }
 
@@ -1099,9 +1092,6 @@ static void process_conn(struct thread *t, struct conn *conn)
 
 	case CONN_STATE_DEL_IN_KEY:
 		state_del_in_key(t, conn);
-		break;
-	case CONN_STATE_DEL_LOCK_KV:
-		state_del_lock_kv(t, conn);
 		break;
 
 	case CONN_TIME_LIMIT_STATE_IN_VALUE_SIZE:

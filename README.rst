@@ -150,3 +150,4 @@ DEL
 ::
 
 	[CMD] [ERRNO]
+	Note: DEL is non-block and always return E_NONE

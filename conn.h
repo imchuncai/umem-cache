@@ -22,10 +22,6 @@ enum conn_set_flag {
 	CONN_SET_FLAG_NON_BLOCK		= 1 << 0,
 };
 
-enum conn_del_flag {
-	CONN_DEL_FLAG_NON_BLOCK		= 1 << 0,
-};
-
 #define CONN_THREAD_INFO_SIZE		(4 + 4)
 #define CONN_CMD_SIZE			(1 + 1 + 1 + 8)
 #define CONN_VAL_SIZE			(1 + 8)
@@ -50,7 +46,6 @@ enum conn_state {
 	CONN_STATE_SET_LOCK_WAIT,
 
 	CONN_STATE_DEL_IN_KEY,
-	CONN_STATE_DEL_LOCK_KV,
 
 	CONN_STATE_DISCARD_VALUE,
 

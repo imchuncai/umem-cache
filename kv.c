@@ -13,6 +13,7 @@ void kv_init(struct kv *kv, const unsigned char *key, unsigned char slab_offset)
 {
 	hlist_head_init(&kv->ref_conn_list);
 	kv->locked = false;
+	kv->delete = false;
 	kv->slab_offset = slab_offset;
 	kv->hval_allocated = false;
 	kv->sval_allocated = false;
@@ -41,9 +42,6 @@ bool kv_down_to_one_ref(const struct kv *kv)
 
 /**
  * kv_lock - Lock @kv
- *
- * Note: if you want delete a kv, just lock it, the last conn return the kv will
- * delete it for you.
  */
 void kv_lock(struct kv *kv)
 {
@@ -59,6 +57,16 @@ void kv_unlock(struct kv *kv)
 	assert(kv->locked);
 	kv->locked = false;
 	kv->lock_expire_time = UINT64_MAX;
+}
+
+/**
+ * kv_delete - Mark @kv for deletion, the last conn return the kv will delete it
+ */
+void kv_delete(struct kv *kv)
+{
+	assert(!kv_no_ref(kv));
+	kv->locked = true;
+	kv->delete = true;
 }
 
 /**
