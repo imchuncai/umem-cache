@@ -21,6 +21,8 @@ debug:
 test:
 	@(./test.sh)
 
+check: test
+
 FORCE:
 
-.PHONY: FORCE debug test
+.PHONY: FORCE debug test check
