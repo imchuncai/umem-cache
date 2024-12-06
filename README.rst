@@ -144,6 +144,7 @@ CONNECT
 	[set] [value-size] [    value    ] [=ERRNO=]
 	[ 1 ] [    8     ] [ value-size  ]
 
+	Note: [=ERRNO=] is always E_NONE, is required for connection reuse
 
 CMD-GET-OR-SET
 --------------
