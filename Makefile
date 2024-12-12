@@ -13,10 +13,10 @@ DEBUG_CFLAGS = -fsanitize=address -fsanitize=undefined -fno-sanitize-recover   \
 		-fno-omit-frame-pointer -DDEBUG
 
 umem-cache: FORCE
-	gcc $(GNU11_CFLAGS) -DNDEBUG
+	gcc $(GNU11_CFLAGS) -DNDEBUG $(EXTRA_CFLAGS)
 
 debug:
-	gcc $(GNU11_CFLAGS) $(DEBUG_CFLAGS)
+	gcc $(GNU11_CFLAGS) $(DEBUG_CFLAGS) $(EXTRA_CFLAGS)
 
 check:
 	@(./test.sh)

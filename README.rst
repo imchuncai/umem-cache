@@ -37,11 +37,19 @@ config config.h as needed
 	make check
 	./umem-cache
 
+or using c flags
+::
+	cd umem-cache
+	make EXTRA_CFLAGS="-DCONFIG_THREAD_NR=4 -DCONFIG_MAX_CONN=512	       \
+	-DCONFIG_MEM_LIMIT=\"(100<<20>>PAGE_SHIFT)\" -DCONFIG_TCP_TIMEOUT=3000"
+	make check
+	./umem-cache
+
 FOR DEBUGGING
 -------------
+config config.h as needed
 ::
 
-	config config.h as needed
 	cd umem-cache
 	make debug
 	./umem-cache

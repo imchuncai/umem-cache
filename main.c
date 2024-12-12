@@ -244,8 +244,8 @@ int main()
 	int sockfd = __listen(epfd);
 	must(sockfd != -1);
 
-	printf("memory: %luk\t", CONFIG_MEM_LIMIT << PAGE_SHIFT >> 10);
-	printf("value_size_limit: %luk\n", CONFIG_VAL_SIZE_LIMIT >> 10);
+	printf("memory: %luk\t", (uint64_t)CONFIG_MEM_LIMIT << PAGE_SHIFT >> 10);
+	printf("value_size_limit: %luk\n", (uint64_t)CONFIG_VAL_SIZE_LIMIT >> 10);
 	printf("started :)\n");
 
 	while (true) {

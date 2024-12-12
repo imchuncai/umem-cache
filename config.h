@@ -10,18 +10,28 @@
 /***************************** CONFIGURABLE BEGIN *****************************/
 
 /* note: server will listen on address in6addr_any */
-#define CONFIG_SERVER_PORT 		47474
-#define CONFIG_THREAD_NR		4
-#define CONFIG_MAX_CONN			512
+#ifndef CONFIG_SERVER_PORT
+#define CONFIG_SERVER_PORT 47474
+#endif
+
+#ifndef CONFIG_THREAD_NR
+#define CONFIG_THREAD_NR 4
+#endif
+
+#ifndef CONFIG_MAX_CONN
+#define CONFIG_MAX_CONN 512
+#endif
+
 /* maximum space allocated for kv (in pages) */
-#define CONFIG_MEM_LIMIT		((uint64_t)100 << 20 >> PAGE_SHIFT)
+#ifndef CONFIG_MEM_LIMIT
+#define CONFIG_MEM_LIMIT (100 << 20 >> PAGE_SHIFT)
+#endif
+
 /* tcp read or write timeout in milliseconds (inaccurate) */
 /* note: we will close the connection if tcp read or write timeout */
-#define CONFIG_TCP_TIMEOUT 		((unsigned int)3000)
-
-static_assert(CONFIG_THREAD_NR > 0 && CONFIG_THREAD_NR <= UINT32_MAX);
-static_assert(CONFIG_MAX_CONN > 0 && CONFIG_MAX_CONN <= UINT32_MAX);
-static_assert(CONFIG_TCP_TIMEOUT > 0);
+#ifndef CONFIG_TCP_TIMEOUT
+#define CONFIG_TCP_TIMEOUT 3000
+#endif
 
 /***************************** CONFIGURABLE END *******************************/
 
@@ -34,5 +44,11 @@ static_assert(CONFIG_TCP_TIMEOUT > 0);
 
 #define PAGE_SHIFT	12
 #define PAGE_MASK	((1 << PAGE_SHIFT) - 1)
+
+static_assert(CONFIG_THREAD_NR > 0 && CONFIG_THREAD_NR <= UINT16_MAX);
+static_assert(CONFIG_THREAD_NR > 0 && CONFIG_THREAD_NR <= UINT32_MAX);
+static_assert(CONFIG_MAX_CONN > 0 && CONFIG_MAX_CONN <= UINT32_MAX);
+static_assert(CONFIG_MEM_LIMIT > 0 && CONFIG_MEM_LIMIT <= UINT64_MAX);
+static_assert(CONFIG_TCP_TIMEOUT > 0 && CONFIG_TCP_TIMEOUT <= UINT32_MAX);
 
 #endif
