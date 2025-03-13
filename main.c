@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <errno.h>
+#include <signal.h>
 #include "thread.h"
 #include "conn.h"
 #include "encoding.h"
@@ -50,6 +51,12 @@ static void must_reserve_event_fd()
 					notify_event_fd[i], &event);
 		must(ret == 0);
 	}
+}
+
+static void handle_signal()
+{
+	signal(SIGINT, exit);
+	signal(SIGTERM, exit);
 }
 
 /**
@@ -235,6 +242,7 @@ static void read_thread_info(struct epoll_event *event)
 
 int main()
 {
+	handle_signal();
 	must_init();
 
 	int epfd = epoll_create1(0);
