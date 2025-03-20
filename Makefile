@@ -12,7 +12,7 @@ GNU11_CFLAGS = $(CFLAGS) -std=gnu11 -Dfalse=0 -Dtrue=1 -Dalignof=__alignof__   \
 DEBUG_CFLAGS = -fsanitize=address -fsanitize=undefined -fno-sanitize-recover   \
 		-fno-omit-frame-pointer -DDEBUG
 
-umem-cache: FORCE
+umem-cache: $(shell find $(SOURCEDIR) -name '*.c' -or -name '*.h')
 	gcc $(GNU11_CFLAGS) -DNDEBUG $(EXTRA_CFLAGS)
 
 debug:
@@ -21,6 +21,7 @@ debug:
 check:
 	@(./test.sh)
 
-FORCE:
+clean:
+	rm -f umem-cache
 
-.PHONY: FORCE debug check
+.PHONY: debug check clean
