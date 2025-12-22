@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -28,7 +28,7 @@ static void *sys_malloc(uint64_t page)
 	int flags = MAP_ANONYMOUS | MAP_PRIVATE;
 	/* manual says ptr will not be NULL, if you not insist. */
 	void *ptr = mmap(NULL, len, prot, flags, -1, 0);
-	if (ptr == (void *)-1)
+	if (ptr == MAP_FAILED)
 		return NULL;
 	return ptr;
 }

@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #ifndef __UMEM_CACHE_LIST_H
 #define __UMEM_CACHE_LIST_H
 
-#include <assert.h>
 #include "container_of.h"
 
 struct list_head {
@@ -56,7 +55,7 @@ static inline void list_add(struct list_head *head, struct list_head *new)
  */
 static inline void __list_del(struct list_head *prev, struct list_head *next)
 {
-	assert(prev != NULL);
+	assert(prev);
 	prev->next = next;
 	next->prev = prev;
 }
@@ -79,21 +78,50 @@ static inline void list_fix(struct list_head *head)
 }
 
 /**
- * list_for_each - Iterate over a list
- * @curr: the (struct list_head *) to use as a loop cursor
+ * list_first_entry - Get the first entry of @head
+ * @type: the struct type of the entry
+ * @member: the name of the list_head within the struct
+ *
+ * Note: caller should make sure @head is not empty.
  */
-#define list_for_each(curr, head)					       \
-	for (curr = (head)->next; curr != (head); curr = curr->next)
+#define list_first_entry(head, type, member)				       \
+	container_of((head)->next, type, member)
 
 /**
- * list_for_each_safe - Iterate over a list where @curr can be safely removed
- * @curr: the (struct list_head *) to use as a loop cursor
- * @temp: the (struct list_head *) to use as temporary storage
+ * list_entry_is_head - Check if @entry is the container of @head
+ * @member: the name of the list_head within the struct
  */
-#define list_for_each_safe(curr, temp, head)				       \
-	for (curr = (head)->next, temp = curr->next;			       \
-		curr != (head);						       \
-		curr = temp, temp = curr->next)
+#define list_entry_is_head(entry, head, member)				       \
+	(&entry->member == (head))
+
+/**
+ * list_next_entry - Get the next entry
+ * @entry: current entry
+ * @member: the name of the list_head within the struct
+ */
+#define list_next_entry(entry, member)					       \
+	container_of((entry)->member.next, typeof(*(entry)), member)
+
+/**
+ * list_for_each_entry - Iterate over @head
+ * @curr: the (struct *) entry to use as a loop cursor
+ * @member: the name of the list_head within the struct
+ */
+#define list_for_each_entry(curr, head, member)				       \
+	for (curr = list_first_entry(head, typeof(*curr), member);	       \
+	     !list_entry_is_head(curr, head, member);			       \
+	     curr = list_next_entry(curr, member))
+
+/**
+ * list_for_each_entry_safe - Iterate over @head where @curr can be safely removed
+ * @curr: the (struct *) entry to use as a loop cursor
+ * @member: the name of the list_head within the struct
+ */
+#define list_for_each_entry_safe(curr, temp, head, member)		       \
+	for (curr = list_first_entry(head, typeof(*curr), member),	       \
+	     temp = list_next_entry(curr, member);			       \
+	     !list_entry_is_head(curr, head, member); 			       \
+	     curr = temp, temp = list_next_entry(temp, member))
 
 /**
  * list_lru_add - Add @new to @head
@@ -122,13 +150,6 @@ static inline void list_lru_touch(struct list_head *head,
 }
 
 /**
- * list_lru_for_each - Iterate over a list lru start from the least active node
- * @curr: the (struct list_head *) to use as a loop cursor
- */
-#define list_lru_for_each(curr, head)					       \
-	for (curr = (head)->prev; curr != (head); curr = curr->prev)
-
-/**
  * list_lru_next_active - Get the next more active node
  */
 static inline struct list_head *list_lru_next_active(struct list_head *node)
@@ -144,7 +165,7 @@ static inline struct list_head *list_lru_next_active(struct list_head *node)
 static inline struct list_head *list_lru_peek(struct list_head *head)
 {
 	assert(!list_empty(head));
-	return list_lru_next_active(head);
+	return head->prev;
 }
 
 struct hlist_head {
@@ -152,7 +173,7 @@ struct hlist_head {
 };
 
 struct hlist_node {
-	struct hlist_node **pprev;
+	struct hlist_node **prev_next;
 	struct hlist_node *next;
 };
 
@@ -177,24 +198,12 @@ static inline bool hlist_empty(const struct hlist_head *head)
  */
 static inline void hlist_add(struct hlist_head *head, struct hlist_node *new)
 {
-	new->pprev = &head->first;
+	new->prev_next = &head->first;
 	struct hlist_node *first = head->first;
 	new->next = first;
 	if (first)
-		first->pprev = &new->next;
+		first->prev_next = &new->next;
 	head->first = new;
-}
-
-/**
- * hlist_add_before - Add @new before @node
- */
-static inline void hlist_add_before(struct hlist_node *node,
-				    struct hlist_node *new)
-{
-	new->pprev = node->pprev;
-	new->next = node;
-	node->pprev = &new->next;
-	*(new->pprev) = new;
 }
 
 /**
@@ -202,11 +211,11 @@ static inline void hlist_add_before(struct hlist_node *node,
  */
 static inline void hlist_del(struct hlist_node *node)
 {
-	struct hlist_node **pprev = node->pprev;
+	struct hlist_node **prev_next = node->prev_next;
 	struct hlist_node *next = node->next;
-	*pprev = next;
+	*prev_next = next;
 	if (next)
-		next->pprev = pprev;
+		next->prev_next = prev_next;
 }
 
 /**
@@ -214,31 +223,20 @@ static inline void hlist_del(struct hlist_node *node)
  */
 static inline void hlist_node_fix(struct hlist_node *node)
 {
-	*(node->pprev) = node;
+	*(node->prev_next) = node;
 	if (node->next)
-		node->next->pprev = &node->next;
+		node->next->prev_next = &node->next;
 }
 
 /**
- * hlist_first_node - Get the first node of a hlist
- * @type: the type of the node
- * @member: the (struct hlist_node) member within @type
- *
- * Note: caller should make sure the hlist is not empty.
- */
-#define hlist_first_node(head, type, member) ({				       \
-	assert(!hlist_empty(head));					       \
-	container_of((head)->first, type, member);})
-
-/**
- * hlist_for_each - Iterate over a hlist
+ * hlist_for_each - Iterate over @head
  * @curr: the (struct hlist_node *) to use as a loop cursor
  */
 #define hlist_for_each(curr, head)					       \
 	for (curr = (head)->first; curr ; curr = curr->next)
 
 /**
- * hlist_for_each_safe - Iterate over a hlist where @curr can be safely removed
+ * hlist_for_each_safe - Iterate over @head where @curr can be safely removed
  * @curr: the (struct hlist_node *) to use as a loop cursor
  * @temp: the (struct hlist_node *) to use as temporary storage
  */

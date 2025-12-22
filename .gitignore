@@ -1,3 +1,6 @@
 .vscode/
 .VSCodeCounter/
 umem-cache
+go.mod
+go.sum
+*.pem

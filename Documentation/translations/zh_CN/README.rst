@@ -1,133 +1,221 @@
 .. SPDX-License-Identifier: GPL-2.0-only
-.. Copyright (C) 2024, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+.. Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 ==========
 UMEM-CACHE
 ==========
-UMEM-CACHE是一个用户空间键值对缓存。
 
-我们对UMEM-CACHE, MEMCACHED和REDIS的缓存性能和速度进行了测试比较。在绝大多数测试中，
-UMEM-CACHE表现出更好的缓存命中率以及更少的内存使用量。在缓存小对象的测试中，
-UMEM-CACHE比REDIS快20%左右。
+UMEM-CACHE是一个用户空间键值对缓存，包含内置的反缓存击穿，tls加密通信和raft集群方案。
 
 Multilingual 多语言
 ==================
 
 - `简体中文 <https://github.com/imchuncai/umem-cache/tree/master/Documentation/translations/zh_CN/README.rst>`_
 
-使用要求
+运行要求
 =======
-1. 64位linux
-2. linux 2.6.32或更新(未验证)
-3. 页面大小要求为4K
-4. 运行测试需要安装Go和100MB内存
+
+- 64位linux
+- linux 3.15或更新(未验证)
+- 4K页面大小
+- 如果tls使能，要求linux 4.17或更新(未验证)
+- 如果tls使能，要求启用ktls
 
 编译
-=====
-编译需要安装GCC
+====
 
-用于生产
--------
-按需求配置config.h
+- 要求安装GCC
+- 如果tls使能，要求安装gnutls 3.5.6或更新
+- 如果要执行make check，要求安装Go
+
 ::
 
 	cd umem-cache
-	make
-	make check
-	./umem-cache
-
-或使用 c flags
-::
-	cd umem-cache
-	make EXTRA_CFLAGS="-DCONFIG_THREAD_NR=4 -DCONFIG_MAX_CONN=512	       \
-	-DCONFIG_MEM_LIMIT=\"(100<<20>>PAGE_SHIFT)\" -DCONFIG_TCP_TIMEOUT=3000"
-	make check
-	./umem-cache
-
-用于测试
--------
-按需求配置config.h
-::
-
-	cd umem-cache
-	make debug
-	./umem-cache
+	make RAFT=0 TLS=0 THREAD_NR=4 MAX_CONN=512 MEM_LIMIT=104857600 TCP_TIMEOUT=3000
+	make check RAFT=0 TLS=0
+	./umem-cache 10047
 
 测试
 ====
-移步 `umem-cache-client-Go <https://github.com/imchuncai/umem-cache-client-Go>`_,
-它包含了功能测试，性能测试，基准测试以及与MEMCACHED和REDIS的性能及速度比较。
+
+- 功能测试： `umem-cache-client-Go <https://github.com/imchuncai/umem-cache-client-Go>`_
+- 基准测试： `umem-cache-benchmark <https://github.com/imchuncai/umem-cache-benchmark>`_
+- 集群基准测试：计划于2026年底进行测试
 
 特性
 ====
 
 任意的键和值
 -----------
-键和值可以是任意字节数组，除了键的长度需要限制在255字节以内。
+
+键和值可以是任意字节数组，除了在使用单例时键的长度需要限制在255字节以内，使用集群时键的长度需要限制在247字节以内。
 
 反缓存击穿
 ---------
+
 反缓存击穿是内置的。
 
 缓存击穿是指当某个热键首次进入缓存时，每个人都争相将其缓存，从而给后备数据库带来压力。反缓存击
-穿试图仅允许一个连接执行缓存工作，从而缓解这种情况。
+穿通过仅允许一个连接执行缓存工作来避免这种情况。
 
-缓存指令不会失败
---------------
-缓存指令永远不会失败
-
-没有额外的线程
-------------
-除了主线程和用户要求的工作线程之外没有运行其他的线程。
-
-集群
-====
-我没有提供内置的集群方案，但是我们设计了“版本”系统，你可以轻易地搭建一个。
-
-搭建要求
--------
-1. 一个系统S用于存储和分发服务器集群信息。
-
-如何工作
+集群方案
 -------
 
-系统S
-~~~~~
-1. 启动所有新加入的服务器，停止所有不再需要的服务器。
-2. 更新S上服务器集群信息包括一个自增的服务器版本号。
-3. 通知所有的客户端，或者用新的版本号与所有服务建立一次连接。
+我们提供了内置的集群方案，它基于raft共识算法实现，提供一致性和可用性保证。
 
-客户端
-~~~~~
-当客户端发现连接断开时，不要着急重连，应首先确认S上的集群信息。
-
-1. 从S上获取新的集群信息。
-2. 关闭所有的旧连接。
-3. 用新的服务器版本号重新建立连接。
-4. 当与所有服务器都建立连接之后客户端可以继续发送请求。
+- 注意：我们与raft的不同之处请查看 `raft-paper.rst <https://github.com/imchuncai/umem-cache/tree/master/Documentation/raft-paper.rst>`_
+- 注意：所有集群中的机器应该使用相同的THREAD_NR和MEM_LIMIT编译运行
+- 警告：不支持ipv6链路本地地址
+- 警告：不要将使用过的服务端加入到集群中
+- 警告：不支持直接重启节点，应将节点先踢出再重新加入
+- 警告：不支持域名解析
 
 客户端协议
 =========
 
-- 客户端应使用 tcp over ipv6 连接到服务器
-- 命令代码在conn.h
-- 错误代码在errno.h
-
-=ERRNO=
--------
-::
-
-	[ IN  ]
-	[errno]
-	[  1  ]
+- 客户端应使用基于ipv6的tcp连接到服务器
 
 CONNECT
 -------
 ::
 
-	[        OUT        ]
-	[thread-id] [version] [=ERRNO=]
-	[    4    ] [   4   ]
+	[        OUT         ] [ IN  ]
+	[reserved] [thread-id] [error]
+	[   4    ] [    4    ] [  1  ]
+
+	注意：[error]总是0
+
+客户端协议 (编译参数包含RAFT)
+=========================
+
+- 客户端应使用基于ipv6的tcp连接到服务器
+- 如果协议标签包含(ADMIN)，客户端应使用管理员端口（运行端口号 + 1）
+- command编码请查看 `raft_proto.h <https://github.com/imchuncai/umem-cache/tree/master/raft_proto.h>`_
+- 缓存工作流请查看 `cluster_cache_flow.txt <https://github.com/imchuncai/umem-cache/tree/master/Documentation/translations/zh_CN/cluster_cache_flow.txt>`_
+
+客户端hash
+=========
+
+我们采用客户端hash来分发键。
+
+键在集群中与在单例中有所不同，在集群中它多一个8字节的版本号前缀。
+
+客户端应该使用MurmurHash3_x64_128散列函数，种子设置为74,然后使用前64位散列结果当作小端序整
+数来分发键到指定线程。键的版本号为该线程所在机器的版本号。如果该机器被标记为不可用，这个键应该
+被分发到下一个可用的机器相同的线程上，同时键的版本号保持不变。这些机器应该被视为呈环形排列。
+
+=MACHINE=
+---------
+::
+
+	[sin6-address] [sin6-port] [reserved] [id] [stability] [version]
+	[     16     ] [    2    ] [   2    ] [4 ] [    8    ] [   8   ]
+
+	注意：[stability]的值越小表示机器越稳定
+	注意：((stability & 1) == 1)表示机器是可用状态
+
+REQUEST-VOTE (INTERNAL)
+-----------------------
+::
+
+	[                              OUT                              ] [      IN      ]
+	[command] [reserved] [candidate-id] [term] [log-index] [log-term] [term] [granted]
+	[   1   ] [   3    ] [     4      ] [ 8  ] [    8    ] [   8    ] [ 8  ] [   1   ]
+
+APPEND-LOG (INTERNAL)
+---------------------
+::
+
+	[                                   OUT                                    ]
+	[command] [type] [reserved] [machines-size] [term] [leader-id] [follower-id]
+	[   1   ] [ 1  ] [   6    ] [      8      ] [ 8  ] [    4    ] [     4     ]
+
+	[                                  OUT                                  ]
+	[log-index] [log-term] [version] [next-machine-version] [next-machine-id]
+	[    8    ] [   8    ] [   8   ] [         8          ] [       4       ]
+
+	[                        OUT                         ] [      IN      ]
+	[new-machine-nr] [distinct_machines_n] [   machines  ] [term] [applied]
+	[      4       ] [         8         ] [=MACHINE= * n] [ 8  ] [   1   ]
+
+HEARTBEAT / LOG-APPLIED-CHECK (INTERNAL)
+----------------------------------------
+::
+
+	[          OUT            ] [      IN      ]
+	[command] [reserved] [term] [term] [applied]
+	[   1   ] [   7    ] [ 8  ] [ 8  ] [   1   ]
+
+INIT-CLUSTER / CHANGE-CLUSTER (ADMIN)
+-------------------------------------
+::
+
+	[                       OUT                        ] [ IN  ]
+	[command] [reserved] [machines-size] [   machines  ] [error]
+	[   1   ] [   7    ] [      8      ] [=MACHINE= * n] [  1  ]
+
+	注意：[error]总是0, 客户端需要检查集群是否确实变更
+	注意：n要求为2的幂次并且最小为4
+	注意：不允许使用重复的机器
+	注意：集群调整时，不允许发生变更的成员超过半数
+	注意：集群扩容只允许扩充一倍的成员
+	注意：集群缩容只允许减少一半的成员
+
+LEADER
+------
+::
+
+	[  OUT  ] [                    IN                     ]
+	[command] [sin6-address] [sin6-port] [error] [reserved]
+	[   1   ] [     16     ] [    2    ] [  1  ] [   1    ]
+
+	注意：[error]0表示成功, 1表示没有领导者信息
+
+CLUSTER
+-------
+::
+
+	[  OUT  ] [                           IN                            ]
+	[command] [type] [reserved] [machines-size] [version] [  machines   ]
+	[   1   ] [ 1  ] [   7    ] [      8      ] [   8   ] [=MACHINE= * n]
+
+注意：集群类型请查看 `log.h <https://github.com/imchuncai/umem-cache/tree/master/log.h>`_
+
+CONNECT
+-------
+::
+
+	[             OUT              ] [ IN  ]
+	[command] [reserved] [thread-id] [error]
+	[   1   ] [   3    ] [    4    ] [  1  ]
+
+	注意：[error]总是0
+
+=APPROVAL=
+----------
+::
+
+	[           IN           ]
+	[version] [approval-count]
+	[   8   ] [      8       ]
+
+AUTHORITY
+---------
+::
+
+                               [ ASYNC  ] [  ASYNC   ]
+	[  OUT  ]              [  OUT   ]
+	[command] [=APPROVAL=] [reserved] [=APPROVAL=]
+	[   1   ]              [   1    ]
+
+	警告：客户端设置TCP_NODELAY可能会损害服务端性能
+
+缓存协议
+=======
+
+连接到目标线程后，使用以下协议与线程进行交互。
+
+- command编码请查看 `conn.h <https://github.com/imchuncai/umem-cache/tree/master/conn.h>`_
 
 =CMD=
 -----
@@ -141,24 +229,27 @@ CONNECT
 -----
 ::
 
-			   [[set] == TRUE]
-	[       OUT      ] [     OUT     ]
-	[set] [value-size] [    value    ] [=ERRNO=]
-	[ 1 ] [    8     ] [ value-size  ]
+	[          OUT          ] [ IN  ]
+	[value-size] [  value   ] [error]
+	[    8     ] [value-size] [  1  ]
 
-	Note: [=ERRNO=] is always E_NONE, is required for connection reuse
+	注意：[error]总是0
 
 CMD-GET-OR-SET
 --------------
 ::
 
-				     [[errno] == E_NONE] [[errno] == E_GET_MISS]
-		[        IN        ] [       IN        ]
-	[=CMD=] [errno] [value-size] [      value      ] [        =SET=        ]
-		[  1  ] [    8     ] [   value-size    ]
+				     [[error] == 0] [[error] == 1]
+		[        IN        ] [     IN     ]
+	[=CMD=] [value-size] [error] [   value    ] [   =SET=    ]
+		[    8     ] [  1  ] [ value-size ]
 
 CMD-DEL
 -------
 ::
 
-	[=CMD=] [=ERRNO=]
+                [ IN  ]
+	[=CMD=] [error]
+	        [  1  ]
+
+	注意：[error]总是0

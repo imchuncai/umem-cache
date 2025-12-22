@@ -1,27 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
-#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/timerfd.h>
-#include <time.h>
-#include <stdio.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
 #include <assert.h>
 #include "thread.h"
 #include "encoding.h"
+#include "rwonce.h"
+#include "epoll.h"
 #include "debug.h"
 
-static volatile bool PRINT_NOMEM = true;
-
-static void print_nomem()
-{
-	if (PRINT_NOMEM) {
-		PRINT_NOMEM = false;
-		printf("WARRING: nomem\n");
-	}
-}
+static struct thread threads[CONFIG_THREAD_NR];
 
 #define conn_kv(conn)	(conn->kv_borrower.kv)
 
@@ -56,15 +49,14 @@ static const unsigned char size_to_idx[SIZE_TO_IDX_LEN] = {
 	74, 74, 74, 74, };
 
 #ifdef DEBUG
-
-void kv_cache_idx_generate_print()
+static void kv_cache_idx_generate_print()
 {
 	struct kv_cache cache;
 	bool ok __attribute__((unused));
 	ok = kv_cache_init(&cache, KV_CACHE_OBJ_SIZE_MIN);
 	assert(ok);
 	int i = 0;
-	debug_printf("{\n\t 0, ");
+	printf("{\n\t 0, ");
 	for (unsigned int size = KV_CACHE_OBJ_SIZE_MIN + 8;
 				size <= KV_CACHE_OBJ_SIZE_MAX; size += 8) {
 		struct kv_cache temp;
@@ -77,17 +69,12 @@ void kv_cache_idx_generate_print()
 		}
 
 		if (SIZE_TO_IDX_IDX(size) % 18 == 0)
-			debug_printf("\n\t%2d, ", i);
+			printf("\n\t%2d, ", i);
 		else
-			debug_printf("%2d, ", i);
+			printf("%2d, ", i);
 	}
-	debug_printf("}\n\n");
+	printf("}\n\n");
 }
-
-#else
-
-void kv_cache_idx_generate_print() {}
-
 #endif
 
 static bool kv_cache_list_init(struct kv_cache kv_cache_list[KV_CACHE_LEN])
@@ -95,7 +82,7 @@ static bool kv_cache_list_init(struct kv_cache kv_cache_list[KV_CACHE_LEN])
 	assert(KV_CACHE_LEN == size_to_idx[SIZE_TO_IDX_LEN - 1] + 1);
 
 	for (unsigned int i = 0; i < SIZE_TO_IDX_LEN - 1; i++) {
-		if (size_to_idx[i] != size_to_idx[i+1]) {
+		if (size_to_idx[i] != size_to_idx[i + 1]) {
 			uint16_t size = KV_CACHE_OBJ_SIZE_MIN + 8 * i;
 			if(!kv_cache_init(&kv_cache_list[size_to_idx[i]], size))
 				return false;
@@ -105,8 +92,43 @@ static bool kv_cache_list_init(struct kv_cache kv_cache_list[KV_CACHE_LEN])
 }
 
 /**
+ * conn_malloc - Allocate space for conn
+ * 
+ * @return: the allocated conn on success, or NULL on failure
+ */
+static struct conn *conn_malloc(struct thread *t, int sockfd)
+{
+	struct conn *conn = fixed_mem_cache_malloc(&t->conn_cache);
+	if (conn) {
+		conn->state = CONN_STATE_OUT_SUCCESS;
+		conn->clock_time_left = 0;
+		conn->sockfd = sockfd;
+		kv_borrower_init(&conn->kv_borrower);
+	}
+	return conn;
+}
+
+/**
+ * conn_free - Deallocates the space related to @conn
+ */
+static void conn_free(struct thread *t, struct conn *conn)
+{
+	close(conn->sockfd);
+	fixed_mem_cache_free(&t->conn_cache, conn);
+}
+
+/**
+ * thread_range - Check if @ptr is inside a thread
+ */
+static bool thread_range(void *ptr)
+{
+	return ptr >= (void *)threads &&
+	       ptr < (void *)(threads + CONFIG_THREAD_NR);
+}
+
+/**
  * kv_cache_get - Get the kv_cache that manages memory for objects of
- * size @size bytes 
+ * size @size bytes
  */
 static struct kv_cache *kv_cache_get(struct thread *t, uint64_t size)
 {
@@ -117,6 +139,28 @@ static struct kv_cache *kv_cache_get(struct thread *t, uint64_t size)
 		(cache - 1)->slab_page > (cache)->slab_page);
 	return cache;
 }
+
+#ifdef CONFIG_RAFT
+static void warmed_up(struct thread *t)
+{
+	if (!t->__warmed_up)
+		WRITE_ONCE(t->__warmed_up, true);
+}
+
+static bool thread_warmed_up(struct thread *t)
+{
+	return READ_ONCE(t->__warmed_up);
+}
+
+bool threads_warmed_up()
+{
+	for (int i = 0; i < CONFIG_THREAD_NR; i++) {
+		if (thread_warmed_up(threads + i))
+			return true;
+	}
+	return false;
+}
+#endif
 
 static bool reclaim_lru(struct thread *t);
 
@@ -218,17 +262,16 @@ static void hash_del_advance(struct thread *t, unsigned char *key)
 
 static void call_clock(struct thread *t, struct conn *conn)
 {
-	if (!conn->call_clock) {
-		conn->lock_expire_at = t->jiffies + 2;
-		conn->call_clock = true;
+	if (conn->clock_time_left == 0) {
+		conn->clock_time_left = 2;
 		hlist_add(&t->clock_list, &conn->clock_node);
 	}
 }
 
 static void cancel_clock(struct conn *conn)
 {
-	if (conn->call_clock) {
-		conn->call_clock = false;
+	if (conn->clock_time_left > 0) {
+		conn->clock_time_left = 0;
 		hlist_del(&conn->clock_node);
 	}
 }
@@ -312,7 +355,7 @@ static void lru_add(struct thread *t, struct kv *kv)
 
 static void lru_del(struct kv *kv)
 {
-	list_del(&kv->lru);
+	list_lru_del(&kv->lru);
 	list_head_init(&kv->lru);
 }
 
@@ -325,6 +368,11 @@ static void kv_enable(struct thread *t, struct conn *conn)
 	lru_add(t, kv);
 }
 
+/**
+ * Note: we don't need to call clock on the kv if it is still borrowed after
+ * disabled, because the conns that borrows this kv is busy on io writing,
+ * TCP_USER_TIMEOUT will takes care of that for us.
+ */
 static void kv_disable(struct thread *t, struct kv *kv)
 {
 	assert(kv_enabled(kv));
@@ -346,6 +394,10 @@ static bool reclaim_lru(struct thread *t)
 	if (!kv_no_borrower(kv))
 		return false;
 
+#ifdef CONFIG_RAFT
+	warmed_up(t);
+#endif
+
 	kv_disable(t, kv);
 	kv_free(t, kv);
 	return true;
@@ -359,28 +411,7 @@ static void conn_lock_key(struct thread *t, struct conn *conn)
 
 static bool conn_with_key_locked(struct conn *conn)
 {
-	return  conn->state == CONN_STATE_GET_OUT_MISS ||
-		conn->state == CONN_STATE_SET_IN_VALUE_SIZE ||
-		conn->state == CONN_STATE_SET_IN_VALUE;
-}
-
-static void change_to_get_out_hit(struct thread *t, struct conn *conn);
-
-static void conn_unlock_key_for_success(struct thread *t, struct conn *conn)
-{
-	cancel_clock(conn);
-	kv_enable(t, conn);
-	struct kv *kv = conn_kv(conn);
-
-	struct list_head *curr, *temp;
-	list_for_each_safe(curr, temp, &conn->interest_list) {
-		list_del(curr);
-		struct conn *conn = container_of(curr, struct conn, interest_list);
-		conn_borrow_kv(t, conn, kv);
-		change_to_get_out_hit(t, conn);
-	}
-
-	conn_return_kv(t, conn);
+	return  conn->state > CONN_STATE_SET_DIVIDER;
 }
 
 static void cmd_get(struct thread *t, struct conn *conn);
@@ -389,49 +420,36 @@ static void conn_unlock_key_for_failure(struct thread *t, struct conn *conn)
 {
 	cancel_clock(conn);
 	hash_del_advance(t, conn->key);
-	if (conn_kv(conn) != NULL)
+	if (conn_kv(conn))
 		conn_return_kv(t, conn);
 
-	struct list_head *curr, *temp;
-	list_for_each_safe(curr, temp, &conn->interest_list) {
-		list_del(curr);
-		struct conn *conn = container_of(curr, struct conn, interest_list);
-		cmd_get(t, conn);
+	struct conn *curr, *temp;
+	list_for_each_entry_safe(curr, temp, &conn->interest_list, interest_list) {
+		list_del(&curr->interest_list);
+		cmd_get(t, curr);
 	}
 }
 
-/**
- * thread_add_conn - Add @conn to @t
- * 
- * @return: true on success, false on too many connections
- */
-bool thread_add_conn(struct thread *t, struct conn *conn)
+void thread_dispatch(uint32_t id, int sockfd)
 {
-	pthread_mutex_lock(&t->mu);
-	if (t->conn_nr >= CONFIG_MAX_CONN_PER_THREAD) {
-		pthread_mutex_unlock(&t->mu);
-		return false;
+	struct thread *t = threads + id;
+	if (!epoll_add_out(t->epfd, sockfd, ((uint64_t)sockfd << 32) | 1))
+		close(sockfd);
+}
+
+static void thread_accept(struct thread *t, int sockfd)
+{
+	struct conn *conn = conn_malloc(t, sockfd);
+	if (conn) {
+		struct epoll_event event;
+		event.events = EPOLLIN | EPOLLOUT | EPOLLET;
+		event.data.ptr = conn;
+		int ret = epoll_ctl(t->epfd, EPOLL_CTL_MOD, conn->sockfd, &event);
+		if (ret != 0)
+			conn_free(t, conn);
+	} else {
+		close(sockfd);
 	}
-	t->conn_nr++;
-	hlist_add(&t->conn_list, &conn->thread_node);
-	pthread_mutex_unlock(&t->mu);
-
-	conn->call_clock = false;
-	conn->state = CONN_STATE_OUT_SUCCESS;
-	kv_borrower_init(&conn->kv_borrower);
-
-	struct epoll_event event;
-	event.events = EPOLLIN | EPOLLOUT | EPOLLET;
-	event.data.ptr = conn;
-	int ret = epoll_ctl(t->epfd, EPOLL_CTL_ADD, conn->sockfd, &event);
-	if (ret == 0)
-		return true;
-
-	pthread_mutex_lock(&t->mu);
-	t->conn_nr--;
-	hlist_del(&conn->thread_node);
-	pthread_mutex_unlock(&t->mu);
-	return false;
 }
 
 /**
@@ -440,19 +458,15 @@ bool thread_add_conn(struct thread *t, struct conn *conn)
 static void free_conn(struct thread *t, struct conn *conn)
 {
 	debug_printf("free conn:\n");
-	pthread_mutex_lock(&t->mu);
-	t->conn_nr--;
-	hlist_del(&conn->thread_node);
-	pthread_mutex_unlock(&t->mu);
 
 	if (conn_with_key_locked(conn))
 		conn_unlock_key_for_failure(t, conn);
-	else if (conn_kv(conn) != NULL)
+	else if (conn_kv(conn))
 		conn_return_kv(t, conn);
 	else if (conn->state == CONN_STATE_GET_BLOCKED)
 		list_del(&conn->interest_list);
 
-	conn_free(conn);
+	conn_free(t, conn);
 }
 
 /**
@@ -493,8 +507,8 @@ static bool __conn_full_io(const struct conn *conn)
 static bool conn_read(
 struct thread *t, struct conn *conn, unsigned char *buffer)
 {
-	assert(conn->unread > 0);
-	ssize_t n = read(conn->sockfd, buffer, conn->unread);
+	assert(conn->unio > 0);
+	ssize_t n = read(conn->sockfd, buffer, conn->unio);
 	return conn_check_io(t, conn, n);
 }
 
@@ -510,18 +524,6 @@ struct thread *t, struct conn *conn, unsigned char *buffer)
 }
 
 /**
- * conn_full_discard - Discard all unread bytes
- * 
- * @return: true on full discard, false on short discard
- */
-static bool conn_full_discard(struct thread *t, struct conn *conn)
-{
-	assert(conn->unread > 0);
-	ssize_t n = recv(conn->sockfd, NULL, conn->unread, MSG_TRUNC);
-	return conn_check_io(t, conn, n) && __conn_full_io(conn);
-}
-
-/**
  * conn_read_msg - Read message from @conn to @iov
  * @iovlen: length of @iov
  * 
@@ -534,7 +536,7 @@ struct thread *t, struct conn *conn, struct iovec *iov, size_t iovlen)
 	msg.msg_iov = iov;
 	msg.msg_iovlen = iovlen;
 
-	assert(conn->unread > 0);
+	assert(conn->unio > 0);
 	ssize_t n = recvmsg(conn->sockfd, &msg, 0);
 	return conn_check_io(t, conn, n);
 }
@@ -559,8 +561,8 @@ struct thread *t, struct conn *conn, struct iovec *iov, size_t iovlen)
 static bool conn_write(
 struct thread *t, struct conn *conn, const unsigned char *buffer)
 {
-	assert(conn->unwrite > 0);
-	ssize_t n = send(conn->sockfd, buffer, conn->unwrite, MSG_NOSIGNAL);
+	assert(conn->unio > 0);
+	ssize_t n = send(conn->sockfd, buffer, conn->unio, MSG_NOSIGNAL);
 	return conn_check_io(t, conn, n);
 }
 
@@ -588,13 +590,13 @@ struct thread *t, struct conn *conn, struct iovec *iov, size_t iovlen)
 	msg.msg_iov = iov;
 	msg.msg_iovlen = iovlen;
 
-	assert(conn->unwrite > 0);
+	assert(conn->unio > 0);
 	ssize_t n = sendmsg(conn->sockfd, &msg, MSG_NOSIGNAL);
 	return conn_check_io(t, conn, n);
 }
 
 /**
- * conn_full_write_msg - Write message from @iov to @conn 
+ * conn_full_write_msg - Write message from @iov to @conn
  * @iovlen: length of @iov
  * 
  * @return: true on full write, false on short write
@@ -612,18 +614,23 @@ struct thread *t, struct conn *conn, struct iovec *iov, size_t iovlen)
  */
 static bool conn_write_byte(struct thread *t, struct conn *conn, char b)
 {
-	conn->unwrite = 1;
 	ssize_t n = send(conn->sockfd, &b, 1, MSG_NOSIGNAL);
-	return conn_check_io(t, conn, n);
+	if (n > 0)
+		return true;
+
+	if (!(n == -1 && errno == EWOULDBLOCK))
+		free_conn(t, conn);
+
+	return false;
 }
 
 static void change_to_in_cmd(struct conn *conn)
 {
-	assert(conn->state == CONN_STATE_OUT_SUCCESS || 
+	assert(conn->state == CONN_STATE_OUT_SUCCESS ||
 	       conn->state == CONN_STATE_GET_OUT_HIT);
 	assert(conn_kv(conn) == NULL);
 	conn->state = CONN_STATE_IN_CMD;
-	conn->unread = CMD_SIZE_MAX;
+	conn->unio = CMD_SIZE_MAX;
 	/* Don't call state_in_cmd(), it is very likely that we are blocked on
 	read. And we just out something, so the read event can not be triggered
 	this round, it will be triggered later. */
@@ -633,7 +640,7 @@ static void state_out_success(struct thread *t, struct conn *conn)
 {
 	debug_printf("CONN_STATE_OUT_SUCCESS:\n");
 
-	if (conn_write_byte(t, conn, E_NONE))
+	if (conn_write_byte(t, conn, 0))
 		change_to_in_cmd(conn);
 }
 
@@ -643,136 +650,19 @@ static void change_to_out_success(struct thread *t, struct conn *conn)
 	state_out_success(t, conn);
 }
 
-static void state_set_discard_value(struct thread *t, struct conn *conn)
-{
-	debug_printf("CONN_STATE_SET_DISCARD_VALUE:\n");
-
-	if (conn_full_discard(t, conn))
-		change_to_out_success(t, conn);
-}
-
-static void change_to_set_discard_value(struct thread *t, struct conn *conn)
-{
-	assert( conn->state == CONN_STATE_SET_IN_VALUE_SIZE ||
-		conn->state == CONN_STATE_SET_DISCARD_VALUE_SIZE);
-
-	if (conn->val_size == 0) {
-		change_to_out_success(t, conn);
-	} else {
-		conn->state = CONN_STATE_SET_DISCARD_VALUE;
-		conn->unread = conn->val_size;
-		state_set_discard_value(t, conn);
-	}
-}
-
-static void state_set_discard_value_size(struct thread *t, struct conn *conn)
-{
-	static_assert(sizeof(((struct conn *)0)->buffer) >= CONN_VAL_SIZE);
-	uint64_t readed = CONN_VAL_SIZE - conn->unread;
-	if (!conn_full_read(t, conn, conn->buffer + readed))
-		return;
-
-	bool set = conn->buffer[0];
-	if (!set) {
-		conn_unlock_key_for_failure(t, conn);
-		change_to_out_success(t, conn);
-		return;
-	}
-
-	conn->val_size = big_endian_uint64(conn->buffer + 1);
-	if (conn->val_size > CONFIG_VAL_SIZE_LIMIT)
-		free_conn(t, conn);
-	else
-		change_to_set_discard_value(t, conn);
-}
-
-static void change_to_set_in_value_success(struct thread *t, struct conn *conn)
-{
-	conn_unlock_key_for_success(t, conn);
-	change_to_out_success(t, conn);
-}
-
-static void state_set_in_value(struct thread *t, struct conn *conn)
-{
-	debug_printf("CONN_STATE_SET_IN_VALUE:\n");
-	
-	uint64_t readed = conn_kv(conn)->val_size - conn->unread;
-	struct iovec iov[2];
-	int iov_len = kv_val_to_iovec(conn_kv(conn), readed, iov);
-	if (conn_full_read_msg(t, conn, iov, iov_len))
-		change_to_set_in_value_success(t, conn);
-}
-
-static void change_to_set_in_value(struct thread *t, struct conn *conn)
-{
-	if (conn_kv(conn)->val_size == 0) {
-		change_to_set_in_value_success(t, conn);
-	} else {
-		conn->state = CONN_STATE_SET_IN_VALUE;
-		conn->unread = conn_kv(conn)->val_size;
-		state_set_in_value(t, conn);
-	}
-}
-
-static void state_set_in_value_size(struct thread *t, struct conn *conn)
-{
-	debug_printf("CONN_STATE_SET_IN_VALUE_SIZE:\n");
-
-	static_assert(sizeof(((struct conn *)0)->buffer) >= CONN_VAL_SIZE);
-	uint64_t readed = CONN_VAL_SIZE - conn->unread;
-	if (!conn_full_read(t, conn, conn->buffer + readed))
-		return;
-
-	bool set = conn->buffer[0];
-	if (!set) {
-		conn_unlock_key_for_failure(t, conn);
-		change_to_out_success(t, conn);
-		return;
-	}
-
-	conn->val_size = big_endian_uint64(conn->buffer + 1);
-	if (conn->val_size > CONFIG_VAL_SIZE_LIMIT) {
-		free_conn(t, conn);
-		return;
-	}
-
-	struct kv *kv = kv_malloc(t, conn->key, conn->val_size);
-	if (kv) {
-		kv_init(kv, conn->key, conn->val_size);
-		kv_borrow(kv, &conn->kv_borrower);
-		change_to_set_in_value(t, conn);
-	} else {
-		print_nomem();
-		conn_unlock_key_for_failure(t, conn);
-		change_to_set_discard_value(t, conn);
-	}
-}
-
-static void change_to_set_in_value_size(struct conn *conn)
-{
-	conn->state = CONN_STATE_SET_IN_VALUE_SIZE;
-	conn->unread = CONN_VAL_SIZE;
-	/* Don't call state_set_in_value_size(), it is very likely that we are
-	blocked on read. And we just out miss, so the read event can not be
-	triggered this round, it will be triggered later. */
-}
-
 static void state_get_out_hit(struct thread *t, struct conn *conn)
 {
 	debug_printf("CONN_STATE_GET_OUT_HIT: %lu\n", conn_kv(conn)->val_size);
 
-	uint64_t written = CONN_VAL_SIZE + conn_kv(conn)->val_size - conn->unwrite;
+	uint64_t written = GET_RES_SIZE + conn_kv(conn)->val_size - conn->unio;
 	struct iovec iov[3];
 	uint64_t iov_len;
-	unsigned char buffer[CONN_VAL_SIZE];
-	if (written < CONN_VAL_SIZE) {
-		buffer[0] = E_NONE;
-		big_endian_put_uint64(buffer + 1, conn_kv(conn)->val_size);
-		iov[0].iov_base = buffer + written;
-		iov[0].iov_len = CONN_VAL_SIZE - written;
+	if (written < GET_RES_SIZE) {
+		iov[0].iov_base = conn->buffer + written;
+		iov[0].iov_len = GET_RES_SIZE - written;
 		iov_len = 1 + kv_val_to_iovec(conn_kv(conn), 0, iov + 1);
 	} else {
-		uint64_t i = conn_kv(conn)->val_size - conn->unwrite;
+		uint64_t i = conn_kv(conn)->val_size - conn->unio;
 		iov_len = kv_val_to_iovec(conn_kv(conn), i, iov);
 	}
 
@@ -785,25 +675,98 @@ static void state_get_out_hit(struct thread *t, struct conn *conn)
 static void change_to_get_out_hit(struct thread *t, struct conn *conn)
 {
 	conn->state = CONN_STATE_GET_OUT_HIT;
-	conn->unwrite = CONN_VAL_SIZE + conn_kv(conn)->val_size;
+	conn->unio = GET_RES_SIZE + conn_kv(conn)->val_size;
+	conn->miss = false;
+	conn->size = htonll(conn_kv(conn)->val_size);
 	state_get_out_hit(t, conn);
+}
+
+static void conn_unlock_key_for_success(struct thread *t, struct conn *conn)
+{
+	cancel_clock(conn);
+	kv_enable(t, conn);
+	struct kv *kv = conn_kv(conn);
+
+	struct conn *curr, *temp;
+	list_for_each_entry_safe(curr, temp, &conn->interest_list, interest_list) {
+		list_del(&curr->interest_list);
+		conn_borrow_kv(t, curr, kv);
+		change_to_get_out_hit(t, curr);
+	}
+
+	conn_return_kv(t, conn);
+}
+
+static void change_to_set_in_value_success(struct thread *t, struct conn *conn)
+{
+	conn_unlock_key_for_success(t, conn);
+	change_to_out_success(t, conn);
+}
+
+static void state_set_in_value(struct thread *t, struct conn *conn)
+{
+	debug_printf("CONN_STATE_SET_IN_VALUE:\n");
+	
+	uint64_t readed = conn_kv(conn)->val_size - conn->unio;
+	struct iovec iov[2];
+	int iov_len = kv_val_to_iovec(conn_kv(conn), readed, iov);
+	if (conn_full_read_msg(t, conn, iov, iov_len))
+		change_to_set_in_value_success(t, conn);
+}
+
+static void change_to_set_in_value(struct thread *t, struct conn *conn)
+{
+	if (conn_kv(conn)->val_size == 0) {
+		change_to_set_in_value_success(t, conn);
+	} else {
+		conn->state = CONN_STATE_SET_IN_VALUE;
+		conn->unio = conn_kv(conn)->val_size;
+		state_set_in_value(t, conn);
+	}
+}
+
+static void state_set_in_value_size(struct thread *t, struct conn *conn)
+{
+	debug_printf("CONN_STATE_SET_IN_VALUE_SIZE:\n");
+
+	uint64_t readed = SET_REQ_SIZE - conn->unio;
+	if (!conn_full_read(t, conn, conn->buffer + readed))
+		return;
+
+	conn->val_size = ntohll(conn->size);
+	struct kv *kv = kv_malloc(t, conn->key, conn->val_size);
+	if (kv) {
+		kv_init(kv, conn->key, conn->val_size);
+		kv_borrow(kv, &conn->kv_borrower);
+		change_to_set_in_value(t, conn);
+	} else {
+		free_conn(t, conn);
+	}
+}
+
+static void change_to_set_in_value_size(struct conn *conn)
+{
+	conn->state = CONN_STATE_SET_IN_VALUE_SIZE;
+	conn->unio = SET_REQ_SIZE;
+	/* Don't call state_set_in_value_size(), it is very likely that we are
+	blocked on read. And we just out miss, so the read event can not be
+	triggered this round, it will be triggered later. */
 }
 
 static void state_get_out_miss(struct thread *t, struct conn *conn)
 {
 	debug_printf("CONN_STATE_GET_OUT_MISS:\n");
 
-	unsigned char buffer[CONN_VAL_SIZE];
-	buffer[0] = E_GET_MISS;
-	uint64_t written = CONN_VAL_SIZE - conn->unwrite;
-	if (conn_full_write(t, conn, buffer + written))
+	uint64_t written = GET_RES_SIZE - conn->unio;
+	if (conn_full_write(t, conn, conn->buffer + written))
 		change_to_set_in_value_size(conn);
 }
 
 static void change_to_get_out_miss(struct thread *t, struct conn *conn)
 {
 	conn->state = CONN_STATE_GET_OUT_MISS;
-	conn->unwrite = CONN_VAL_SIZE;
+	conn->unio = GET_RES_SIZE;
+	conn->miss = true;
 	state_get_out_miss(t, conn);
 }
 
@@ -813,8 +776,9 @@ static void cmd_get(struct thread *t, struct conn *conn)
 	if (node == NULL) {
 		conn_lock_key(t, conn);
 		change_to_get_out_miss(t, conn);
-	} else if (conn_range(node)) {
+	} else if (thread_range(node)) {
 		struct conn *lock_conn = container_of(node, struct conn, hash_node);
+		conn->state = CONN_STATE_GET_BLOCKED;
 		list_add(&lock_conn->interest_list, &conn->interest_list);
 		call_clock(t, lock_conn);
 	} else {
@@ -828,16 +792,10 @@ static void cmd_del(struct thread *t, struct conn *conn)
 {
 	struct hlist_node *node = hash_get(&t->hash_table, conn->key);
 	if (node == NULL) {
-	} else if (conn_range(node)) {
+	} else if (thread_range(node)) {
 		struct conn *lock_conn = container_of(node, struct conn, hash_node);
 		assert(conn_with_key_locked(lock_conn));
-		if (lock_conn->state == CONN_STATE_SET_IN_VALUE_SIZE) {
-			conn_unlock_key_for_failure(t, lock_conn);
-			lock_conn->state = CONN_STATE_SET_DISCARD_VALUE_SIZE;
-		} else if (lock_conn->state == CONN_STATE_SET_IN_VALUE) {
-			conn_unlock_key_for_failure(t, lock_conn);
-			lock_conn->state = CONN_STATE_SET_DISCARD_VALUE;
-		}
+		free_conn(t, lock_conn);
 	} else {
 		struct kv *kv = container_of(node, struct kv, hash_node);
 		kv_disable(t, kv);
@@ -852,11 +810,11 @@ static void state_in_cmd(struct thread *t, struct conn *conn)
 	debug_printf("CONN_STATE_IN_CMD: ..........................\n");
 	assert(conn_kv(conn) == NULL);
 
-	uint64_t readed = CMD_SIZE_MAX - conn->unread;
+	uint64_t readed = CMD_SIZE_MAX - conn->unio;
 	if (!conn_read(t, conn, conn->key - 1 + readed))
 		return;
 
-	readed = CMD_SIZE_MAX - conn->unread;
+	readed = CMD_SIZE_MAX - conn->unio;
 	if (readed < CMD_SIZE_MIN + (uint64_t)conn->key[0])
 		return;
 
@@ -866,13 +824,13 @@ static void state_in_cmd(struct thread *t, struct conn *conn)
 
 	char cmd = *(conn->key - 1);
 	switch (cmd) {
-	case CONN_CMD_GET_OR_SET:
-		debug_printf("CONN_CMD_GET_OR_SET: key_n: %u\n", conn->key[0]);
+	case CACHE_CMD_GET_OR_SET:
+		debug_printf("CACHE_CMD_GET_OR_SET: key_n: %u\n", conn->key[0]);
 		cmd_get(t, conn);
 		break;
 
-	case CONN_CMD_DEL:
-		debug_printf("CONN_CMD_DEL: key_n: %u\n", conn->key[0]);
+	case CACHE_CMD_DEL:
+		debug_printf("CACHE_CMD_DEL: key_n: %u\n", conn->key[0]);
 		cmd_del(t, conn);
 		break;
 
@@ -905,42 +863,10 @@ static void process_conn(struct thread *t, struct conn *conn)
 		state_set_in_value(t, conn);
 		break;
 
-	case CONN_STATE_SET_DISCARD_VALUE_SIZE:
-		state_set_discard_value_size(t, conn);
-		break;
-	case CONN_STATE_SET_DISCARD_VALUE:
-		state_set_discard_value(t, conn);
-		break;
-
 	case CONN_STATE_GET_BLOCKED:
-		/* no epoll event */
-		static_assert((CONN_STATE_GET_BLOCKED & 7) == 0);
+	case CONN_STATE_SET_DIVIDER:
 		__builtin_unreachable();
-		break;
 	}
-}
-
-/**
- * free_all_conn - Free all conns for version upgrade
- * @event_fd: used to notify main thread we have done the work
- * 
- * Note: we don't have to hold @t->mu because main thread is blocked waiting
- * our signal. And free_conn() don't have to hold @t->mu either, we can ignore
- * that time cost because this is not a frequently accessed function.
- */
-static void free_all_conn(struct thread *t, int event_fd)
-{
-	/* can't use for each loop here, multi conns may be freed */
-	while (t->conn_nr > 0) {
-		struct conn *conn;
-		conn = hlist_first_node(&t->conn_list, struct conn, thread_node);
-		free_conn(t, conn);
-	}
-	assert(hlist_empty(&t->conn_list));
-
-	uint64_t u = 1;
-	ssize_t ret2 __attribute__((unused)) = write(event_fd, &u, sizeof(u));
-	assert(ret2 == sizeof(u));
 }
 
 static void clock_service(struct thread *t, int timerfd)
@@ -948,16 +874,16 @@ static void clock_service(struct thread *t, int timerfd)
 	uint64_t exp;
 	size_t n __attribute__((unused)) = read(timerfd, &exp, sizeof(exp));
 	assert(n == sizeof(exp));
-	t->jiffies += exp;
 
 	struct hlist_node *curr, *temp;
 	hlist_for_each_safe(curr, temp, &t->clock_list) {
 		struct conn *conn = container_of(curr, struct conn, clock_node);
 		assert(conn_with_key_locked(conn));
-		assert(conn->call_clock);
-		assert(conn->lock_expire_at < t->jiffies + 2);
-		if (conn->lock_expire_at <= t->jiffies)
+		assert(conn->clock_time_left > 0);
+		if (exp >= conn->clock_time_left)
 			free_conn(t, conn);
+		else
+			conn->clock_time_left -= exp;
 	}
 }
 
@@ -966,29 +892,26 @@ static void clock_service(struct thread *t, int timerfd)
  */
 static void grab_epoll_events(struct thread *t)
 {
-	struct epoll_event events[CONFIG_MAX_CONN_PER_THREAD];
-	int n = epoll_wait(t->epfd, events, CONFIG_MAX_CONN_PER_THREAD, -1);
+	struct epoll_event *events = t->events;
+	int n = epoll_wait(t->epfd, events, THREAD_MAX_CONN, -1);
 	int timerfd = -1;
 	for (int i = 0; i < n; i++) {
-		static_assert(alignof(struct conn) % 4 == 0);
-		/* this is an update version signal */
+		static_assert(alignof(struct conn) % 8 == 0);
+
 		if (events[i].data.u64 & 1) {
-			free_all_conn(t, events[i].data.u64 >> 32);
-			return;
-		}
-
-		/* this is a clock service */
-		if (events[i].data.u64 & 2) {
+			/* main thread distribute sockfd to us */
+			thread_accept(t, events[i].data.u64 >> 32);
+		} else if (events[i].data.u64 & 2) {
+			/* this is a clock service */
 			timerfd = events[i].data.u64 >> 32;
-			continue;
-		}
-
-		struct conn *conn = events[i].data.ptr;
-		if (events[i].events & ~(EPOLLIN | EPOLLOUT)) {
-			debug_printf("events: %u\n", events[i].events);
-			free_conn(t, conn);
-		} else if (events[i].events & conn->state) {
-			process_conn(t, conn);
+		} else {
+			struct conn *conn = events[i].data.ptr;
+			if (events[i].events & ~(EPOLLIN | EPOLLOUT)) {
+				debug_printf("events: %u\n", events[i].events);
+				free_conn(t, conn);
+			} else if (events[i].events & conn->state) {
+				process_conn(t, conn);
+			}
 		}
 	}
 
@@ -1006,12 +929,6 @@ static void *loop_forever(void *ptr)
 	__builtin_unreachable();
 }
 
-bool thread_run(struct thread *t)
-{
-	pthread_t thread_id;
-	return pthread_create(&thread_id, NULL, loop_forever, t) == 0;
-}
-
 static bool thread_create_clock_service(struct thread *t)
 {
 	int timerfd = timerfd_create(CLOCK_BOOTTIME, 0);
@@ -1026,31 +943,49 @@ static bool thread_create_clock_service(struct thread *t)
 		close(timerfd);
 		return false;
 	}
-
-	struct epoll_event event;
-	event.data.u64 = ((uint64_t)timerfd << 32) | 2;
-	event.events = EPOLLIN | EPOLLET;
-	int ret = epoll_ctl(t->epfd, EPOLL_CTL_ADD, timerfd, &event);
-	if (ret == 0)
-		return true;
 	
+	if (epoll_add_in(t->epfd, timerfd, ((uint64_t)timerfd << 32) | 2))
+		return true;
+
 	close(timerfd);
 	return false;
 }
 
-bool thread_init(struct thread *t, uint64_t page)
+static bool thread_init(struct thread *t)
 {
-	memory_init(&t->memory, page);
+#ifdef CONFIG_RAFT
+	t->__warmed_up = false;
+#endif
+	memory_init(&t->memory, THREAD_MAX_MEM >> PAGE_SHIFT);
 	list_head_init(&t->lru_head);
-	t->jiffies = 0;
 	hlist_head_init(&t->clock_list);
-	pthread_mutex_init(&t->mu, NULL);
-	hlist_head_init(&t->conn_list);
 	t->epfd = epoll_create1(0);
 	if (t->epfd == -1)
 		return false;
+	fixed_mem_cache_init(&t->conn_cache, t->__conns, sizeof(struct conn),
+							THREAD_MAX_CONN);
 
 	return thread_create_clock_service(t) &&
 		hash_table_init(&t->hash_table, &t->memory) &&
 		kv_cache_list_init(t->kv_cache_list);
+}
+
+static bool thread_run(struct thread *t)
+{
+	thread_init(t);
+	pthread_t thread_id;
+	return pthread_create(&thread_id, NULL, loop_forever, t) == 0;
+}
+
+bool threads_run()
+{
+#ifdef DEBUG
+	kv_cache_idx_generate_print();
+#endif
+
+	for (uint32_t i = 0; i < CONFIG_THREAD_NR; i++) {
+		if (!thread_run(&threads[i]))
+			return false;
+	}
+	return true;
 }

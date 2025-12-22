@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 // Most of the ideas are stolen from the Go programming language.
 
 #include "hash_table.h"
@@ -7,13 +7,13 @@
 #include "config.h"
 
 static_assert(sizeof(struct hlist_head) == 8);
-#define PAGE_TO_MASK(page)	(((page) << PAGE_SHIFT >> 3) - 1)
-#define MASK_TO_PAGE(mask)	(((mask) + 1) << 3 >> PAGE_SHIFT)
+#define PAGE_TO_MASK(page)	(((page) << (PAGE_SHIFT - 3)) - 1)
+#define MASK_TO_PAGE(mask)	(((mask) + 1) >> (PAGE_SHIFT - 3))
 #define MIN_MASK		PAGE_TO_MASK(1)
 
-static unsigned char *node_to_key(const struct hlist_node *node)
+static const unsigned char *node_to_key(const struct hlist_node *node)
 {
-	return (unsigned char *)(node + 1);
+	return (const unsigned char *)(node + 1);
 }
 
 static struct hlist_node *key_to_node(const unsigned char *key)
@@ -30,16 +30,15 @@ static struct hlist_node *key_to_node(const unsigned char *key)
 bool hash_table_init(struct hash_table *ht, struct memory *m)
 {
 	struct hlist_head *buckets = memory_malloc(m, MASK_TO_PAGE(MIN_MASK));
-	if (buckets == NULL)
-		return false;
-
-	ht->n = 0;
-	ht->mask = MIN_MASK;
-	ht->buckets = buckets;
-	ht->old_buckets = NULL;
-	for (int i = 0; i <= MIN_MASK; i++)
-		hlist_head_init(&ht->buckets[i]);
-	return true;
+	if (buckets) {
+		ht->n = 0;
+		ht->mask = MIN_MASK;
+		ht->buckets = buckets;
+		ht->old_buckets = NULL;
+		for (int i = 0; i <= MIN_MASK; i++)
+			hlist_head_init(&ht->buckets[i]);
+	}
+	return buckets;
 }
 
 /**
@@ -47,7 +46,7 @@ bool hash_table_init(struct hash_table *ht, struct memory *m)
  */
 static bool under_migrating(const struct hash_table *ht)
 {
-	return ht->old_buckets != NULL;
+	return ht->old_buckets;
 }
 
 /**
@@ -73,9 +72,9 @@ static uint64_t key_hash(const unsigned char *key)
  */
 static bool key_equal(const unsigned char *key_a, const unsigned char *key_b)
 {
-	const uint64_t *last = (uint64_t *)(key_a + key_a[0]);
-	const uint64_t *a = (uint64_t *)key_a;
-	const uint64_t *b = (uint64_t *)key_b;
+	const uint64_t *last = (const uint64_t *)(key_a + key_a[0]);
+	const uint64_t *a = (const uint64_t *)key_a;
+	const uint64_t *b = (const uint64_t *)key_b;
 	while(a <= last && *a == *b) {
 		a++;
 		b++;
@@ -109,8 +108,7 @@ struct hlist_node *hash_get(const struct hash_table *ht, const unsigned char *ke
 	struct hlist_head *bucket = hash_bucket(ht, key);
 	struct hlist_node *node;
 	hlist_for_each(node, bucket) {
-		unsigned char *node_key = node_to_key(node);
-		if (key_equal(node_key, key))
+		if (key_equal(node_to_key(node), key))
 			return node;
 	}
 	return NULL;
@@ -134,7 +132,7 @@ static void evacuate(struct hash_table *ht, uint64_t i, struct memory *m)
 		struct hlist_node *curr, *temp;
 		hlist_for_each_safe(curr, temp, bucket) {
 			// hlist_del(curr);
-			unsigned char *key = node_to_key(curr);
+			const unsigned char *key = node_to_key(curr);
 			uint64_t hkey = key_hash(key);
 			struct hlist_head *bucket = &ht->buckets[hkey & ht->mask];
 			hlist_add(bucket, curr);
@@ -151,7 +149,7 @@ static void evacuate(struct hash_table *ht, uint64_t i, struct memory *m)
 		while (ht->migrated < max && bucket_evacuated(ht, ht->migrated))
 			ht->migrated++;
 
-		if (ht->migrated > ht->old_mask){
+		if (ht->migrated > ht->old_mask) {
 			memory_free(m, ht->old_buckets, MASK_TO_PAGE(ht->old_mask));
 			ht->old_buckets = NULL;
 		}
@@ -179,12 +177,12 @@ static void migrate(struct hash_table *ht, uint64_t i, struct memory *m)
 /**
  * should_grow - Check if the number of buckets should be increased
  */
-static bool should_grow(struct hash_table *ht)
+static bool should_grow(const struct hash_table *ht)
 {
 	return !under_migrating(ht) && ht->n > (ht->mask << 3);
 }
 
-static uint64_t grow_required_page(struct hash_table *ht)
+static uint64_t grow_required_page(const struct hash_table *ht)
 {
 	return MASK_TO_PAGE(ht->mask) << 1;
 }
@@ -210,13 +208,13 @@ uint64_t hash_add(struct hash_table *ht, const unsigned char *key, struct memory
 /**
  * should_shrink - Check if the number of buckets should be reduced
  */
-static bool should_shrink(struct hash_table *ht)
+static bool should_shrink(const struct hash_table *ht)
 {
 	return !under_migrating(ht) && ht->mask > MIN_MASK &&
 		ht->n < (ht->mask << 1);
 }
 
-static uint64_t shrink_required_page(struct hash_table *ht)
+static uint64_t shrink_required_page(const struct hash_table *ht)
 {
 	return MASK_TO_PAGE(ht->mask) >> 1;
 }
@@ -240,15 +238,16 @@ uint64_t hash_del(struct hash_table *ht, const unsigned char *key, struct memory
 static bool hash_resize(struct hash_table *ht, uint64_t page, struct memory *m)
 {
 	void *new = memory_malloc(m, page);
-	if (new == NULL)
-		return false;
-
-	ht->old_buckets = ht->buckets;
-	ht->old_mask = ht->mask;
-	ht->migrated = 0;
-	ht->mask = PAGE_TO_MASK(page);
-	ht->buckets = new;
-	return true;
+	if (new) {
+		ht->old_buckets = ht->buckets;
+		ht->old_mask = ht->mask;
+		ht->migrated = 0;
+		ht->mask = PAGE_TO_MASK(page);
+		ht->buckets = new;
+		for (uint64_t i = 0; i <= ht->mask; i++)
+			hlist_head_init(&ht->buckets[i]);
+	}
+	return new;
 }
 
 bool hash_grow(struct hash_table *ht, struct memory *m)

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include "kv.h"
 #include <string.h>
 
 void kv_init(struct kv *kv, const unsigned char *key, uint64_t val_size)
 {
-	hlist_head_init(&kv->borrower_list);
 	list_head_init(&kv->lru);
+	hlist_head_init(&kv->borrower_list);
 	kv->val_size = val_size;
 	memcpy(KV_KEY(kv), key, KEY_SIZE(key));
 }

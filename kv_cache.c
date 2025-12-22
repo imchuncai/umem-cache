@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <string.h>
 #include "kv_cache.h"
@@ -60,16 +60,15 @@ static bool add_slab(struct kv_cache *cache, struct memory *m)
 {
 	assert(cache->free_objects == 0);
 	void *slab = memory_malloc(m, cache->slab_page);
-	if (slab == NULL)
-		return false;
-
-	struct slab_obj *curr, *temp;
-	slab_obj_for_each(cache, slab, curr, temp) {
-		free_obj_init(curr, cache->next_free_soo);
-		cache->next_free_soo = soo_make(slab, curr);
+	if (slab) {
+		struct slab_obj *curr, *temp;
+		slab_obj_for_each(cache, slab, curr, temp) {
+			free_obj_init(curr, cache->next_free_soo);
+			cache->next_free_soo = soo_make(slab, curr);
+		}
+		cache->free_objects = cache->slab_objects;
 	}
-	cache->free_objects = cache->slab_objects;
-	return true;
+	return slab;
 }
 
 static struct slab_obj_offset __pop_free_soo(struct kv_cache *cache)
@@ -89,7 +88,7 @@ static struct slab_obj_offset __pop_free_soo(struct kv_cache *cache)
 static struct slab_obj_offset kv_cache_malloc(
 				struct kv_cache *cache, struct memory *m)
 {
-	if (cache->next_free_soo.x == 0 && !add_slab(cache, m))
+	if (cache->free_objects == 0 && !add_slab(cache, m))
 		return (struct slab_obj_offset) { 0 };
 
 	cache->free_objects--;
@@ -121,7 +120,7 @@ static void migrate(void *obj_from, struct slab_obj_offset soo_to, uint16_t size
 
 	if (!hlist_empty(&to->borrower_list)) {
 		struct hlist_node *first = to->borrower_list.first;
-		first->pprev = &to->borrower_list.first;
+		first->prev_next = &to->borrower_list.first;
 
 		struct hlist_node *curr;
 		hlist_for_each(curr, &to->borrower_list) {
