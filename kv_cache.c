@@ -29,23 +29,21 @@ static bool is_free_obj(void *obj)
 /**
  * kv_cache_init - Initialize @cache
  * @obj_size: minimum size of object that @cache allocates
- * 
- * @return: true on success, false on failure
  */
-bool kv_cache_init(struct kv_cache *cache, uint16_t obj_size)
+void kv_cache_init(struct kv_cache *cache, uint16_t obj_size)
 {
 	obj_size = ALIGN(obj_size, SLAB_OBJ_ALIGN);
-	if (obj_size > SLAB_OBJ_SIZE_MAX)
-		return false;
+	assert(obj_size <= SLAB_OBJ_SIZE_MAX);
 
 	cache->slab_page = 1 << slab_calculate_order(obj_size);
-	/* maybe we can allocate bigger object, don't do that, bigger object
-	may have a better order */
-	cache->obj_size = obj_size;
-	cache->slab_objects = (cache->slab_page << PAGE_SHIFT) / obj_size;
+	uint16_t slab_size = cache->slab_page << PAGE_SHIFT;
+	cache->slab_objects = slab_size / obj_size;
+	/* Note: bigger object may have a better order,
+	but perform worse in benchmark test */
+	// cache->obj_size = obj_size;
+	cache->obj_size = ALIGN_DOWN(slab_size / cache->slab_objects, 8);
 	cache->free_objects = 0;
 	cache->next_free_soo.x = 0;
-	return true;
 }
 
 /**

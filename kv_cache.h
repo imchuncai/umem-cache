@@ -33,7 +33,7 @@ static_assert(UINT16_MAX >= (1 << SLAB_ORDER_MAX));
 static_assert(UINT16_MAX >= SLAB_OBJ_SIZE_MAX);
 static_assert(UINT16_MAX >= 2 * SLAB_OBJ_MAX);
 
-bool kv_cache_init(struct kv_cache *cache, uint16_t obj_size);
+void kv_cache_init(struct kv_cache *cache, uint16_t obj_size);
 struct kv *kv_cache_malloc_kv(struct kv_cache *cache, struct memory *m);
 bool kv_cache_malloc_concat_val(
 struct kv_cache *cache, struct memory *m, struct slab_obj_offset *soo_ptr);

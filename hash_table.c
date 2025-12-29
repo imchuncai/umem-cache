@@ -2,6 +2,7 @@
 // Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 // Most of the ideas are stolen from the Go programming language.
 
+#include <string.h>
 #include "hash_table.h"
 #include "murmur_hash3.h"
 #include "config.h"
@@ -70,16 +71,9 @@ static uint64_t key_hash(const unsigned char *key)
 /**
  * key_equal - Check if @a and @b are equal
  */
-static bool key_equal(const unsigned char *key_a, const unsigned char *key_b)
+static bool key_equal(const unsigned char *a, const unsigned char *b)
 {
-	const uint64_t *last = (const uint64_t *)(key_a + key_a[0]);
-	const uint64_t *a = (const uint64_t *)key_a;
-	const uint64_t *b = (const uint64_t *)key_b;
-	while(a <= last && *a == *b) {
-		a++;
-		b++;
-	}
-	return a > last;
+	return a[0] == b[0] && memcmp(a, b, a[0] + 1) == 0;
 }
 
 /**

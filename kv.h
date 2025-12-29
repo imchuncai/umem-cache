@@ -37,8 +37,7 @@ struct kv {
 	uint64_t val_size;
 
 	struct hlist_node hash_node;
-	unsigned char data[] __attribute__((aligned(8)));
-	/* alignment is required by key comparison */
+	unsigned char data[];
 };
 
 /* this offset is required for hashtable to locate the key */
@@ -48,7 +47,7 @@ static_assert(offsetof(struct kv, data) - offsetof(struct kv, hash_node) ==
 static_assert(offsetof(struct kv, soo) == 0);
 
 #define KV_KEY(kv)		((kv)->data)
-#define KEY_SIZE(key)		ALIGN(1 + (int)((key)[0]), 8)
+#define KEY_SIZE(key)		(1 + (int)((key)[0]))
 #define KV_KEY_SIZE(kv)		KEY_SIZE(KV_KEY(kv))
 #define KV_VAL(kv)		((kv)->data + KV_KEY_SIZE(kv))
 #define KV_SIZE(kv)	(sizeof(struct kv) + KV_KEY_SIZE(kv) + (kv)->val_size)

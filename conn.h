@@ -70,7 +70,4 @@ required by CONN_STATE_IN_CMD */
 static_assert(offsetof(struct conn, key) - offsetof(struct conn, hash_node) ==
 		sizeof(struct hlist_node));
 
-/* alignment is required by key comparison */
-static_assert(offsetof(struct conn, key) % 8 == 0);
-
 #endif
