@@ -4,12 +4,26 @@
 #include "kv.h"
 #include <string.h>
 
+/* Note: these two fake is designed to reduce branches in migrate() */
+struct list_head fake_lru;
+struct hlist_head fake_hash;
+
 void kv_init(struct kv *kv, const unsigned char *key, uint64_t val_size)
 {
-	list_head_init(&kv->lru);
+	kv_set_fake(kv);
+
 	hlist_head_init(&kv->borrower_list);
 	kv->val_size = val_size;
 	memcpy(KV_KEY(kv), key, KEY_SIZE(key));
+}
+
+void kv_set_fake(struct kv *kv)
+{
+	kv->lru.prev = &fake_lru;
+	kv->lru.next = &fake_lru;
+
+	kv->hash_node.prev_next = &fake_hash.first;
+	kv->hash_node.next = NULL;
 }
 
 /**
@@ -17,7 +31,7 @@ void kv_init(struct kv *kv, const unsigned char *key, uint64_t val_size)
  */
 bool kv_enabled(struct kv *kv)
 {
-	return !list_empty(&kv->lru);
+	return kv->lru.prev != &fake_lru;
 }
 
 void kv_borrow(struct kv *kv, struct kv_borrower *borrower)

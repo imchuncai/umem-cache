@@ -105,16 +105,11 @@ static void migrate(void *obj_from, struct slab_obj_offset soo_to, uint16_t size
 		return;
 	}
 
-	struct kv *from = obj_from;
 	struct kv *to = obj_to;
 	to->soo = soo_to;
 
-	if (kv_enabled(from)) {
-		list_fix(&to->lru);
-		hlist_node_fix(&to->hash_node);
-	} else {
-		list_head_init(&to->lru);
-	}
+	list_fix(&to->lru);
+	hlist_node_fix(&to->hash_node);
 
 	if (!hlist_empty(&to->borrower_list)) {
 		struct hlist_node *first = to->borrower_list.first;

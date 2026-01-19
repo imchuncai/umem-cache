@@ -344,24 +344,13 @@ static void conn_return_kv(struct thread *t, struct conn *conn)
 		kv_free(t, kv);
 }
 
-static void lru_add(struct thread *t, struct kv *kv)
-{
-	list_lru_add(&t->lru_head, &kv->lru);
-}
-
-static void lru_del(struct kv *kv)
-{
-	list_lru_del(&kv->lru);
-	list_head_init(&kv->lru);
-}
-
 static void kv_enable(struct thread *t, struct conn *conn)
 {
 	struct kv *kv = conn_kv(conn);
 	kv->hash_node = conn->hash_node;
 	hlist_node_fix(&kv->hash_node);
 	
-	lru_add(t, kv);
+	list_lru_add(&t->lru_head, &kv->lru);
 }
 
 /**
@@ -372,9 +361,9 @@ static void kv_enable(struct thread *t, struct conn *conn)
 static void kv_disable(struct thread *t, struct kv *kv)
 {
 	assert(kv_enabled(kv));
+	list_lru_del(&kv->lru);
 	hash_del_advance(t, KV_KEY(kv));
-	
-	lru_del(kv);
+	kv_set_fake(kv);
 }
 
 /**

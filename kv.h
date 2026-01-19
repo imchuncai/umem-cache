@@ -24,10 +24,10 @@ struct kv_borrower {
 /**
  * kv -
  * @soo: it has a trick involved, see kv_malloc() and kv_is_concat()
- * @lru: kv is on lru and is ready to serve command GET if it is not empty
+ * @lru: kv is on lru and is ready to serve command GET if kv_enabled()
  * @borrower_list: the list of kv_borrower
  * @val_size: value size
- * @hash_node: resides in a hash_table, only valid on kv_enabled()
+ * @hash_node: resides in a hash_table if kv_enabled()
  * @data: data of key and value
  */
 struct kv {
@@ -53,6 +53,7 @@ static_assert(offsetof(struct kv, soo) == 0);
 #define KV_SIZE(kv)	(sizeof(struct kv) + KV_KEY_SIZE(kv) + (kv)->val_size)
 
 void kv_init(struct kv *kv, const unsigned char *key, uint64_t val_size);
+void kv_set_fake(struct kv *kv);
 bool kv_enabled(struct kv *kv);
 void kv_borrow(struct kv *kv, struct kv_borrower *borrower);
 void kv_return(struct kv_borrower *borrower);
