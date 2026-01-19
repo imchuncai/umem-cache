@@ -371,20 +371,28 @@ static void kv_disable(struct thread *t, struct kv *kv)
  */
 static bool reclaim_lru(struct thread *t)
 {
-	if (list_empty(&t->lru_head))
-		return false;
-	
-	struct list_head *entry = list_lru_peek(&t->lru_head);
-	struct kv *kv = container_of(entry, struct kv, lru);
-	if (!kv_no_borrower(kv))
-		return false;
-
 #ifdef CONFIG_RAFT
 	warmed_up(t);
 #endif
 
+	if (list_empty(&t->lru_head))
+		return false;
+
+	struct list_head *entry = list_lru_peek(&t->lru_head);
+	struct kv *kv = container_of(entry, struct kv, lru);
 	kv_disable(t, kv);
-	kv_free(t, kv);
+	/**
+	 * Note: why the coldest kv have a borrower?
+	 * 
+	 * There are two scenarios:
+	 * 1. A borrower is slow or unexpectedly disconnects, SO_KEEPALIVE will
+	 * deal with it.
+	 * 2. Every kv in the lru list is busy, which means the given memory is
+	 * too small, we just keep reclaim.
+	 */
+	if (kv_no_borrower(kv))
+		kv_free(t, kv);
+
 	return true;
 }
 
