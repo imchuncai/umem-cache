@@ -585,9 +585,25 @@ static void change_to_recv_log_in(struct server *s, struct raft_conn *conn)
 }
 
 static bool state_authority_in(struct server *s, struct raft_conn *conn) {
-	ssize_t n = raft_conn_discard(conn);
-	if (n == -1)
-		return false;
+	uint64_t n = 0;
+	unsigned char buffer[1024];
+	while (true) {
+		ssize_t k = read(conn->sockfd, buffer, 1024);
+		if (k == -1) {
+			if (errno == EWOULDBLOCK) {
+				break;
+			} else {
+				raft_conn_free(conn);
+				return false;
+			}
+		} else {
+			for (int i = 0; i < k; i++)
+				n += buffer[i];
+
+			if (k < 1024)
+				break;
+		}
+	}
 
 	// Note: don't check (n > 0), make it faster
 	conn->authority_pending_nr += n;

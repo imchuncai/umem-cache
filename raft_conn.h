@@ -81,7 +81,6 @@ struct raft_conn {
 /* alignment is required for epoll to distinguish incoming and outgoing connections */
 
 struct raft_conn *raft_in_conn_malloc(int sockfd, bool admin, struct in6_addr peer);
-ssize_t raft_conn_discard(struct raft_conn *conn);
 void raft_out_conn_init(struct raft_conn *conn);
 void raft_conn_set_io(
 	struct raft_conn *conn, enum raft_conn_state state, uint64_t size);

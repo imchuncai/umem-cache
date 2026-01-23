@@ -24,27 +24,6 @@ struct raft_conn *raft_in_conn_malloc(int sockfd, bool admin, struct in6_addr pe
 	}
 	return conn;
 }
-
-ssize_t raft_conn_discard(struct raft_conn *conn)
-{
-	ssize_t discarded = 0;
-	unsigned char trash[1024];
-	while (true) {
-		ssize_t n = read(conn->sockfd, trash, 1024);
-		if (n == -1) {
-			if (errno == EWOULDBLOCK) {
-				return discarded;
-			} else {
-				raft_conn_free(conn);
-				return -1;
-			}
-		} else {
-			discarded += n;
-			if (n < 1024)
-				return discarded;
-		}
-	}
-}
 #else
 struct raft_conn *raft_in_conn_malloc(int sockfd, bool admin, struct in6_addr)
 {
@@ -55,19 +34,6 @@ struct raft_conn *raft_in_conn_malloc(int sockfd, bool admin, struct in6_addr)
 		raft_conn_set_io(conn, RAFT_CONN_STATE_IN_CMD, RAFT_CONN_BUFFER_SIZE);
 	}
 	return conn;
-}
-
-ssize_t raft_conn_discard(struct raft_conn *conn)
-{
-	ssize_t n = recv(conn->sockfd, NULL, SIZE_MAX, MSG_TRUNC);
-	if (n > 0)
-		return n;
-
-	if (n == -1 && errno == EWOULDBLOCK)
-		return 0;
-
-	raft_conn_free(conn);
-	return -1;
 }
 #endif
 

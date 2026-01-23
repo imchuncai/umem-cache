@@ -212,12 +212,10 @@ AUTHORITY
 ---------
 ::
 
-                               [ ASYNC  ] [  ASYNC   ]
-	[  OUT  ]              [  OUT   ]
-	[command] [=APPROVAL=] [reserved] [=APPROVAL=]
-	[   1   ]              [   1    ]
-
-	WARNING: client set TCP_NODELAY may hurt server performance
+                               [    ASYNC    ] [  ASYNC   ]
+	[  OUT  ]              [     OUT     ]
+	[command] [=APPROVAL=] [request-count] [=APPROVAL=]
+	[   1   ]              [      1      ]
 
 CACHE PROTOCOL
 ==============
