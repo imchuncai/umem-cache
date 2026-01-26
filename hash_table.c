@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 // Most of the ideas are stolen from the Go programming language.
 
 #include <string.h>
@@ -93,22 +93,6 @@ static struct hlist_head *hash_bucket(
 }
 
 /**
- * hash_get - Get the hash node of @key from @ht
- * 
- * @return: the hash node or NULL if @key not exist
- */
-struct hlist_node *hash_get(const struct hash_table *ht, const unsigned char *key)
-{
-	struct hlist_head *bucket = hash_bucket(ht, key);
-	struct hlist_node *node;
-	hlist_for_each(node, bucket) {
-		if (key_equal(node_to_key(node), key))
-			return node;
-	}
-	return NULL;
-}
-
-/**
  * bucket_evacuated - Check if the @i'th old_bucket has been evacuated
  */
 static bool bucket_evacuated(const struct hash_table *ht, uint64_t i)
@@ -151,21 +135,23 @@ static void evacuate(struct hash_table *ht, uint64_t i, struct memory *m)
 }
 
 /**
- * migrate_advance - Advancing the migration process
+ * hash_get - Get the hash node of @key from @ht
+ * 
+ * @return: the hash node or NULL if @key not exist
  */
-static void migrate_advance(struct hash_table *ht, struct memory *m)
+struct hlist_node *hash_get(
+	struct hash_table *ht, const unsigned char *key, struct memory *m)
 {
 	if (under_migrating(ht))
 		evacuate(ht, ht->migrated, m);
-}
 
-/**
- * migrate - Make sure @i'th old bucket is evacuated
- */
-static void migrate(struct hash_table *ht, uint64_t i, struct memory *m)
-{
-	evacuate(ht, i, m);
-	migrate_advance(ht, m);
+	struct hlist_head *bucket = hash_bucket(ht, key);
+	struct hlist_node *node;
+	hlist_for_each(node, bucket) {
+		if (key_equal(node_to_key(node), key))
+			return node;
+	}
+	return NULL;
 }
 
 /**
@@ -173,7 +159,7 @@ static void migrate(struct hash_table *ht, uint64_t i, struct memory *m)
  */
 static bool should_grow(const struct hash_table *ht)
 {
-	return !under_migrating(ht) && ht->n > (ht->mask << 3);
+	return ht->n > (ht->mask << 3);
 }
 
 static uint64_t grow_required_page(const struct hash_table *ht)
@@ -186,17 +172,16 @@ static uint64_t grow_required_page(const struct hash_table *ht)
  * 
  * Note: we will not check if @key has been added before
  */
-uint64_t hash_add(struct hash_table *ht, const unsigned char *key, struct memory *m)
+void hash_add(struct hash_table *ht, const unsigned char *key, struct memory *m)
 {
 	ht->n++;
 
 	uint64_t hkey = key_hash(key);
 	if (under_migrating(ht))
-		migrate(ht, hkey & ht->old_mask, m);
+		evacuate(ht, hkey & ht->old_mask, m);
 
 	struct hlist_head *bucket = &ht->buckets[hkey & ht->mask];
 	hlist_add(bucket, key_to_node(key));
-	return should_grow(ht) ? grow_required_page(ht) : 0;
 }
 
 /**
@@ -204,10 +189,15 @@ uint64_t hash_add(struct hash_table *ht, const unsigned char *key, struct memory
  */
 static bool should_shrink(const struct hash_table *ht)
 {
-	return !under_migrating(ht) && ht->mask > MIN_MASK &&
-		ht->n < (ht->mask << 1);
+	return ht->mask > MIN_MASK && ht->n < (ht->mask << 1);
 }
 
+/**
+ * shrink_required_page -
+ * 
+ * Note: we may only need a smaller page if we delete a lot of keys at once, but
+ * this may never happen in production.
+ */
 static uint64_t shrink_required_page(const struct hash_table *ht)
 {
 	return MASK_TO_PAGE(ht->mask) >> 1;
@@ -218,38 +208,39 @@ static uint64_t shrink_required_page(const struct hash_table *ht)
  * 
  * Note: caller should make sure @key has been added to @ht
  */
-uint64_t hash_del(struct hash_table *ht, const unsigned char *key, struct memory *m)
+void hash_del(struct hash_table *ht, const unsigned char *key)
 {
 	ht->n--;
 	hlist_del(key_to_node(key));
-	migrate_advance(ht, m);
-	return should_shrink(ht) ? shrink_required_page(ht) : 0;
 }
 
 /**
- * resize - Adjust the space usage of buckets to @page pages
+ * hash_resize_page - Return required pages for hash table resize
  */
-static bool hash_resize(struct hash_table *ht, uint64_t page, struct memory *m)
+uint64_t hash_resize_page(struct hash_table *ht)
 {
-	void *new = memory_malloc(m, page);
-	if (new) {
-		ht->old_buckets = ht->buckets;
-		ht->old_mask = ht->mask;
-		ht->migrated = 0;
-		ht->mask = PAGE_TO_MASK(page);
-		ht->buckets = new;
-		for (uint64_t i = 0; i <= ht->mask; i++)
-			hlist_head_init(&ht->buckets[i]);
+	if (!under_migrating(ht)) {
+		if (should_grow(ht))
+			return grow_required_page(ht);
+
+		if (should_shrink(ht))
+			return shrink_required_page(ht);
 	}
-	return new;
+	return 0;
 }
 
-bool hash_grow(struct hash_table *ht, struct memory *m)
+/**
+ * hash_resize - Resize hash table
+ * @page: value returned from hash_resize_page()
+ * @new: @page space
+ */
+void hash_resize(struct hash_table *ht, uint64_t page, void *new)
 {
-	return !should_grow(ht) || hash_resize(ht, grow_required_page(ht), m);
-}
-
-bool hash_shrink(struct hash_table *ht, struct memory *m)
-{
-	return !should_shrink(ht) || hash_resize(ht, shrink_required_page(ht), m);
+	ht->old_buckets = ht->buckets;
+	ht->old_mask = ht->mask;
+	ht->migrated = 0;
+	ht->mask = PAGE_TO_MASK(page);
+	ht->buckets = new;
+	for (uint64_t i = 0; i <= ht->mask; i++)
+		hlist_head_init(&ht->buckets[i]);
 }

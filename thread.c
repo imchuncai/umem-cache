@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <sys/socket.h>
 #include <sys/timerfd.h>
@@ -158,7 +158,79 @@ bool threads_warmed_up()
 }
 #endif
 
-static bool reclaim_lru(struct thread *t);
+static void kv_enable(struct thread *t, struct conn *conn)
+{
+	struct kv *kv = conn_kv(conn);
+	kv->hash_node = conn->hash_node;
+	hlist_node_fix(&kv->hash_node);
+	
+	list_lru_add(&t->lru_head, &kv->lru);
+}
+
+/**
+ * Note: we don't need to call clock on the kv if it is still borrowed after
+ * disabled, because the conns that borrows this kv is busy on io writing,
+ * TCP_USER_TIMEOUT will takes care of that for us.
+ */
+static void kv_disable(struct thread *t, struct kv *kv)
+{
+	assert(kv_enabled(kv));
+	list_lru_del(&kv->lru);
+	hash_del(&t->hash_table, KV_KEY(kv));
+	kv_set_fake(kv);
+}
+
+/**
+ * kv_free -  Deallocates the space related to @kv
+ * 
+ * Note: caller should make sure @kv is disabled and has no borrower
+ */
+static void kv_free(struct thread *t, struct kv *kv)
+{
+	assert(kv_no_borrower(kv) && !kv_enabled(kv));
+
+	uint64_t size = KV_SIZE(kv);
+	if (size <= KV_CACHE_OBJ_SIZE_MAX) {
+		struct kv_cache *cache = kv_cache_get(t, size);
+		kv_cache_free(cache, kv->soo, &t->memory);
+	} else if (kv_is_concat(kv)) {
+		struct kv_cache *cache = kv_cache_get(t, (size & PAGE_MASK) + 8);
+		kv_cache_free(cache, kv->soo, &t->memory);
+		memory_free(&t->memory, kv, size >> PAGE_SHIFT);
+	} else {
+		memory_free(&t->memory, kv, (size + PAGE_MASK) >> PAGE_SHIFT);
+	}
+}
+
+/**
+ * reclaim_lru - Reclaim one kv from lru
+ */
+static bool reclaim_lru(struct thread *t)
+{
+#ifdef CONFIG_RAFT
+	warmed_up(t);
+#endif
+
+	if (list_empty(&t->lru_head))
+		return false;
+
+	struct list_head *entry = list_lru_peek(&t->lru_head);
+	struct kv *kv = container_of(entry, struct kv, lru);
+	kv_disable(t, kv);
+	/**
+	 * Note: why the coldest kv have a borrower?
+	 * 
+	 * There are two scenarios:
+	 * 1. A borrower is slow or unexpectedly disconnects, SO_KEEPALIVE will
+	 * deal with it.
+	 * 2. Every kv in the lru list is busy, which means the given memory is
+	 * too small, we just keep reclaim.
+	 */
+	if (kv_no_borrower(kv))
+		kv_free(t, kv);
+
+	return true;
+}
 
 /**
  * __reserve_page - Try to reserve memory for allocating @page pages of space
@@ -232,46 +304,6 @@ static bool kv_cache_malloc_concat_val_advance(
 	return kv_cache_malloc_concat_val(cache, &t->memory, &kv->soo);
 }
 
-static void hash_add_advance(struct thread *t, unsigned char *key)
-{
-	uint64_t page = hash_add(&t->hash_table, key, &t->memory);
-	if (page > 0) {
-		__reserve_page(t, page);
-		if (!hash_grow(&t->hash_table, &t->memory)) {
-			__reserve_page_aggressive(t, page);
-			hash_grow(&t->hash_table, &t->memory);
-		}
-	}
-}
-
-static void hash_del_advance(struct thread *t, unsigned char *key)
-{
-	uint64_t page = hash_del(&t->hash_table, key, &t->memory);
-	if (page > 0) {
-		__reserve_page(t, page);
-		if (!hash_shrink(&t->hash_table, &t->memory)) {
-			__reserve_page_aggressive(t, page);
-			hash_shrink(&t->hash_table, &t->memory);
-		}
-	}
-}
-
-static void call_clock(struct thread *t, struct conn *conn)
-{
-	if (conn->clock_time_left == 0) {
-		conn->clock_time_left = 2;
-		hlist_add(&t->clock_list, &conn->clock_node);
-	}
-}
-
-static void cancel_clock(struct conn *conn)
-{
-	if (conn->clock_time_left > 0) {
-		conn->clock_time_left = 0;
-		hlist_del(&conn->clock_node);
-	}
-}
-
 static void *kv_malloc(struct thread *t, unsigned char *key, uint64_t val_size)
 {
 	uint64_t size = sizeof(struct kv) + KEY_SIZE(key) + val_size;
@@ -306,25 +338,19 @@ static void *kv_malloc(struct thread *t, unsigned char *key, uint64_t val_size)
 	return kv;
 }
 
-/**
- * kv_free -  Deallocates the space related to @kv
- * 
- * Note: caller should make sure @kv is disabled and has no borrower
- */
-static void kv_free(struct thread *t, struct kv *kv)
+static void call_clock(struct thread *t, struct conn *conn)
 {
-	assert(kv_no_borrower(kv) && !kv_enabled(kv));
+	if (conn->clock_time_left == 0) {
+		conn->clock_time_left = 2;
+		hlist_add(&t->clock_list, &conn->clock_node);
+	}
+}
 
-	uint64_t size = KV_SIZE(kv);
-	if (size <= KV_CACHE_OBJ_SIZE_MAX) {
-		struct kv_cache *cache = kv_cache_get(t, size);
-		kv_cache_free(cache, kv->soo, &t->memory);
-	} else if (kv_is_concat(kv)) {
-		struct kv_cache *cache = kv_cache_get(t, (size & PAGE_MASK) + 8);
-		kv_cache_free(cache, kv->soo, &t->memory);
-		memory_free(&t->memory, kv, size >> PAGE_SHIFT);
-	} else {
-		memory_free(&t->memory, kv, (size + PAGE_MASK) >> PAGE_SHIFT);
+static void cancel_clock(struct conn *conn)
+{
+	if (conn->clock_time_left > 0) {
+		conn->clock_time_left = 0;
+		hlist_del(&conn->clock_node);
 	}
 }
 
@@ -344,67 +370,15 @@ static void conn_return_kv(struct thread *t, struct conn *conn)
 		kv_free(t, kv);
 }
 
-static void kv_enable(struct thread *t, struct conn *conn)
-{
-	struct kv *kv = conn_kv(conn);
-	kv->hash_node = conn->hash_node;
-	hlist_node_fix(&kv->hash_node);
-	
-	list_lru_add(&t->lru_head, &kv->lru);
-}
-
-/**
- * Note: we don't need to call clock on the kv if it is still borrowed after
- * disabled, because the conns that borrows this kv is busy on io writing,
- * TCP_USER_TIMEOUT will takes care of that for us.
- */
-static void kv_disable(struct thread *t, struct kv *kv)
-{
-	assert(kv_enabled(kv));
-	list_lru_del(&kv->lru);
-	hash_del_advance(t, KV_KEY(kv));
-	kv_set_fake(kv);
-}
-
-/**
- * reclaim_lru - Reclaim one kv from lru
- */
-static bool reclaim_lru(struct thread *t)
-{
-#ifdef CONFIG_RAFT
-	warmed_up(t);
-#endif
-
-	if (list_empty(&t->lru_head))
-		return false;
-
-	struct list_head *entry = list_lru_peek(&t->lru_head);
-	struct kv *kv = container_of(entry, struct kv, lru);
-	kv_disable(t, kv);
-	/**
-	 * Note: why the coldest kv have a borrower?
-	 * 
-	 * There are two scenarios:
-	 * 1. A borrower is slow or unexpectedly disconnects, SO_KEEPALIVE will
-	 * deal with it.
-	 * 2. Every kv in the lru list is busy, which means the given memory is
-	 * too small, we just keep reclaim.
-	 */
-	if (kv_no_borrower(kv))
-		kv_free(t, kv);
-
-	return true;
-}
-
 static void conn_lock_key(struct thread *t, struct conn *conn)
 {
-	hash_add_advance(t, conn->key);
+	hash_add(&t->hash_table, conn->key, &t->memory);
 	list_head_init(&conn->interest_list);
 }
 
 static bool conn_with_key_locked(struct conn *conn)
 {
-	return  conn->state > CONN_STATE_SET_DIVIDER;
+	return conn->state > CONN_STATE_SET_DIVIDER;
 }
 
 static void cmd_get(struct thread *t, struct conn *conn);
@@ -412,7 +386,7 @@ static void cmd_get(struct thread *t, struct conn *conn);
 static void conn_unlock_key_for_failure(struct thread *t, struct conn *conn)
 {
 	cancel_clock(conn);
-	hash_del_advance(t, conn->key);
+	hash_del(&t->hash_table, conn->key);
 	if (conn_kv(conn))
 		conn_return_kv(t, conn);
 
@@ -693,6 +667,14 @@ static void conn_unlock_key_for_success(struct thread *t, struct conn *conn)
 static void change_to_set_in_value_success(struct thread *t, struct conn *conn)
 {
 	conn_unlock_key_for_success(t, conn);
+
+	uint64_t page = hash_resize_page(&t->hash_table);
+	if (page > 0) {
+		void *new = memory_malloc_advance(t, page);
+		if (new)
+			hash_resize(&t->hash_table, page, new);
+	}
+
 	change_to_out_success(t, conn);
 }
 
@@ -765,7 +747,7 @@ static void change_to_get_out_miss(struct thread *t, struct conn *conn)
 
 static void cmd_get(struct thread *t, struct conn *conn)
 {
-	struct hlist_node *node = hash_get(&t->hash_table, conn->key);
+	struct hlist_node *node = hash_get(&t->hash_table, conn->key, &t->memory);
 	if (node == NULL) {
 		conn_lock_key(t, conn);
 		change_to_get_out_miss(t, conn);
@@ -783,7 +765,7 @@ static void cmd_get(struct thread *t, struct conn *conn)
 
 static void cmd_del(struct thread *t, struct conn *conn)
 {
-	struct hlist_node *node = hash_get(&t->hash_table, conn->key);
+	struct hlist_node *node = hash_get(&t->hash_table, conn->key, &t->memory);
 	if (node == NULL) {
 	} else if (thread_range(node)) {
 		struct conn *lock_conn = container_of(node, struct conn, hash_node);

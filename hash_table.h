@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #ifndef __UMEM_CACHE_HASH_TABLE_H
 #define __UMEM_CACHE_HASH_TABLE_H
@@ -29,10 +29,11 @@ struct hash_table {
 };
 
 bool hash_table_init(struct hash_table *ht, struct memory *m);
-struct hlist_node *hash_get(const struct hash_table *ht, const unsigned char *key);
-uint64_t hash_add(struct hash_table *ht, const unsigned char *key, struct memory *m);
-uint64_t hash_del(struct hash_table *ht, const unsigned char *key, struct memory *m);
-bool hash_grow(struct hash_table *ht, struct memory *m);
-bool hash_shrink(struct hash_table *ht, struct memory *m);
+struct hlist_node *hash_get(
+	      struct hash_table *ht, const unsigned char *key, struct memory *m);
+void hash_add(struct hash_table *ht, const unsigned char *key, struct memory *m);
+void hash_del(struct hash_table *ht, const unsigned char *key);
+uint64_t hash_resize_page(struct hash_table *ht);
+void hash_resize(struct hash_table *ht, uint64_t page, void *new);
 
 #endif
