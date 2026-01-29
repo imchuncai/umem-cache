@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <sys/timerfd.h>
 #include <netinet/tcp.h>
@@ -1155,8 +1155,6 @@ static void state_tls_server_handshake(struct server *s, struct raft_conn *conn)
 	} else if (tls_record_require_write(&conn->session)) {
 		conn->state = RAFT_CONN_STATE_TLS_SERVER_HANDSHAKE_OUT;
 	} else {
-		// FIXME: block once is expected,
-		// but request from gnutls client will block twice
 		conn->state = RAFT_CONN_STATE_TLS_SERVER_HANDSHAKE_IN;
 	}
 }
@@ -1210,7 +1208,7 @@ static void state_in_progress(struct server *s, struct raft_conn *conn)
 		raft_conn_clear(conn);
 }
 
-void member_connect(struct server *s, struct member *m)
+static void member_connect(struct server *s, struct member *m)
 {
 	struct raft_conn *conn = &m->conn;
 	assert(conn->state == RAFT_CONN_STATE_NOT_CONNECTED);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <unistd.h>
 #include <errno.h>
@@ -70,6 +70,8 @@ static bool service_conn_full_read_connect_in(struct service_conn *conn)
 }
 
 #ifdef CONFIG_KERNEL_TLS
+#define EPOLL_EVENTS (EPOLLIN | EPOLLOUT)
+
 static bool handshake(struct service_conn *conn)
 {
 	if (conn->session.session == NULL)
@@ -87,6 +89,8 @@ static bool handshake(struct service_conn *conn)
 
 	return false;
 }
+#else
+#define EPOLL_EVENTS EPOLLIN
 #endif
 
 /**
@@ -129,13 +133,13 @@ static bool accept_new_conn(int sockfd, int epfd)
 		struct service_conn *conn = service_conn_malloc(fd, sin6_addr);
 		if (conn == NULL)
 			close(fd);
-		else if (!epoll_add_in(epfd, fd, (uint64_t)conn))
+		else if (!__epoll_add(epfd, fd, (uint64_t)conn, EPOLL_EVENTS))
 			service_conn_free(conn);
 	}
 }
 
 #define SERVER_MAX_EPOLL_EVENTS	64
-struct epoll_event events[SERVER_MAX_EPOLL_EVENTS];
+static struct epoll_event events[SERVER_MAX_EPOLL_EVENTS];
 
 void must_service_run(int port)
 {
@@ -161,7 +165,7 @@ void must_service_run(int port)
 		for (int i = 0; i < n; i++) {
 			if (events[i].data.ptr) {
 				struct service_conn *conn = events[i].data.ptr;
-				if (events[i].events ^ EPOLLIN)
+				if (events[i].events & ~EPOLL_EVENTS)
 					service_conn_free(conn);
 				else
 					read_thread_info(conn, epfd);

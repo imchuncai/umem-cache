@@ -5,8 +5,8 @@
 #include <string.h>
 
 /* Note: these two fake is designed to reduce branches in migrate() */
-struct list_head fake_lru;
-struct hlist_head fake_hash;
+static struct list_head fake_lru;
+static struct hlist_head fake_hash;
 
 void kv_init(struct kv *kv, const unsigned char *key, uint64_t val_size)
 {
