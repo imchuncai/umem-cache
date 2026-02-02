@@ -5,8 +5,8 @@
 UMEM-CACHE
 ==========
 
-UMEM-CACHE is a key/value memory cache work in user space, it has built-in
-anti-dogpiling, tls and raft cluster solution.
+UMEM-CACHE is a key/value memory cache work in user space, it is multi-threaded,
+lock-free, and has built-in anti-dogpiling, tls and raft cluster solution.
 
 Multilingual 多语言
 ==================
