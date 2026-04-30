@@ -1,5 +1,5 @@
 .. SPDX-License-Identifier: GPL-2.0-only
-.. Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+.. Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 ==========
 UMEM-CACHE
@@ -7,6 +7,8 @@ UMEM-CACHE
 
 UMEM-CACHE是一个用户空间键值对缓存，它是多线程的、无锁的，并且包含了内置的反缓存击穿，tls加密
 和raft集群方案。
+
+如果在特定基准测试中发现UMEM-CACHE比REDIS快100%，请不必过于惊讶。
 
 Multilingual 多语言
 ==================

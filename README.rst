@@ -1,5 +1,5 @@
 .. SPDX-License-Identifier: GPL-2.0-only
-.. Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+.. Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 ==========
 UMEM-CACHE
@@ -7,6 +7,9 @@ UMEM-CACHE
 
 UMEM-CACHE is a key/value memory cache work in user space, it is multi-threaded,
 lock-free, and has built-in anti-dogpiling, tls and raft cluster solution.
+
+Don't be surprised if you see UMEM-CACHE performing 100% faster than REDIS in
+certain benchmarks.
 
 Multilingual 多语言
 ==================
