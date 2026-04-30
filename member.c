@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <stdlib.h>
 #include <string.h>
@@ -23,7 +23,7 @@ static void members_sort_by_id(struct member *members, uint32_t n)
 	qsort(members, n, sizeof(struct member), member_id_cmp);
 }
 
-struct member *members_search_id(const struct member *members, uint32_t n, uint32_t id)
+struct member *members_search_id(struct member *members, uint32_t n, uint32_t id)
 {
 	struct member key;
 	key.id = id;

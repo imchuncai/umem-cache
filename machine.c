@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <string.h>
 #include <stdlib.h>
@@ -69,7 +69,7 @@ void machines_sort_by_addr(struct machine *machines, uint32_t n)
 	qsort(machines, n, MACHINE_SIZE, _machine_addr_cmp);
 }
 
-struct machine *machines_search_addr(
+const struct machine *machines_search_addr(
 	const struct machine *key, const struct machine *base, uint32_t n)
 {
 	return bsearch(key, base, n, MACHINE_SIZE, _machine_addr_cmp);

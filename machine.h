@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #ifndef __UMEM_CACHE_RAFT_MACHINE_H
 #define __UMEM_CACHE_RAFT_MACHINE_H
@@ -35,7 +35,7 @@ int machine_addr_cmp(const struct machine *a, const struct machine *b);
 int machines_cmp(struct machine *a, struct machine *b, uint64_t n);
 void machines_copy(struct machine *dest, const struct machine *src, uint64_t n);
 void machines_sort_by_addr(struct machine *machines, uint32_t n);
-struct machine *machines_search_addr(
+const struct machine *machines_search_addr(
 	const struct machine *m, const struct machine *machines, uint32_t n);
 const struct machine *machines_find(
 		const struct machine *machines, uint32_t n, uint32_t id);

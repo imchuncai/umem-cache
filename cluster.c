@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <stdlib.h>
 #include <string.h>
@@ -62,14 +62,13 @@ bool cluster_has_conn(const struct cluster *cl, const struct raft_conn *conn)
 		(void *)conn < (void *)(cl->members + cl->members_n);
 }
 
-static struct member *cluster_search(const struct cluster *cl,
-				     const struct machine *m)
+static struct member *cluster_search(struct cluster *cl, const struct machine *m)
 {
 	return members_search_id(cl->members, cl->members_n, machine_id(m));
 }
 
 struct log *log_malloc_change_available(
-		const struct cluster *cl, const struct log *old, uint64_t term)
+		struct cluster *cl, const struct log *old, uint64_t term)
 {
 	uint32_t n = old->old_n;
 	struct log *log = log_malloc_unstable(n, n);
@@ -78,7 +77,7 @@ struct log *log_malloc_change_available(
 		machines_copy(new_machines, old->machines, n);
 		for (uint32_t i = 0; i < n; i++) {
 			struct machine *m = new_machines + i;
-			struct member *member = cluster_search(cl, m);
+			const struct member *member = cluster_search(cl, m);
 			if (member)
 				machine_set_stability(m, member->available);
 			else

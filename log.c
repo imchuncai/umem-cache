@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <string.h>
 #include <stdlib.h>
@@ -176,7 +176,7 @@ static bool __log_complete_adjust(struct log *log, struct log *old_log)
 			machine_copy(new, old);
 			keeps++;
 		} else {
-			struct machine *m;
+			const struct machine *m;
 			m = machines_search_addr(new, log->machines, n);
 			if (m) {
 				machine_copy(new, m);

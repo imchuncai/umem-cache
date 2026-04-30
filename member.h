@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #ifndef __UMEM_CACHE_RAFT_MEMBER_H
 #define __UMEM_CACHE_RAFT_MEMBER_H
@@ -27,7 +27,7 @@ struct member {
 };
 
 const char *member_string_address(const struct member *m, char str[INET6_ADDRSTRLEN]);
-struct member *members_search_id(const struct member *members, uint32_t n, uint32_t id);
+struct member *members_search_id(struct member *members, uint32_t n, uint32_t id);
 uint32_t members_init(struct member *members, struct log *log, uint32_t leader);
 
 #endif
