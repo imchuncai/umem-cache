@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
-// Most of the ideas are stolen from the Go programming language.
+
+// Note: Most of the ideas of hash table are stolen from the Go programming language.
+// Note: The cache eviction algorithm follows the S3-FIFO algorithm.
 
 #include <string.h>
 #include "hash_table.h"
 #include "murmur_hash3.h"
 #include "config.h"
 
-static_assert(sizeof(struct hlist_head) == 8);
-#define PAGE_TO_MASK(page)	(((page) << (PAGE_SHIFT - 3)) - 1)
-#define MASK_TO_PAGE(mask)	(((mask) + 1) >> (PAGE_SHIFT - 3))
-#define MIN_MASK		PAGE_TO_MASK(1)
+static_assert(sizeof(((struct hash_table *)0)->buckets) == 8);
+#define PAGE_TO_MASK(page)	(((page) << (PAGE_SHIFT - 3 - 2)) - 1)
+#define MASK_TO_PAGE(mask)	(((mask) + 1) >> (PAGE_SHIFT - 3 - 2))
+#define MIN_PAGE		4
+#define MIN_MASK		PAGE_TO_MASK(MIN_PAGE)
+#define GHOST_OFFSET(page)	((page) << (PAGE_SHIFT - 2))
 
 static const unsigned char *node_to_key(const struct hlist_node *node)
 {
@@ -30,11 +34,12 @@ static struct hlist_node *key_to_node(const unsigned char *key)
  */
 bool hash_table_init(struct hash_table *ht, struct memory *m)
 {
-	struct hlist_head *buckets = memory_malloc(m, MASK_TO_PAGE(MIN_MASK));
+	struct hlist_head *buckets = memory_malloc(m, MIN_PAGE);
 	if (buckets) {
 		ht->n = 0;
 		ht->mask = MIN_MASK;
 		ht->buckets = buckets;
+		ht->ghost = (void *)((char *)buckets + GHOST_OFFSET(MIN_PAGE));
 		ht->old_buckets = NULL;
 		for (int i = 0; i <= MIN_MASK; i++)
 			hlist_head_init(&ht->buckets[i]);
@@ -58,14 +63,23 @@ static bool evacuated(const struct hlist_head *bucket)
 	return hlist_empty(bucket);
 }
 
+static void hash(const unsigned char *key, uint64_t *hkey, uint32_t *fingerprint)
+{
+	uint64_t out[2];
+	MurmurHash3_x64_128(key, (int)key[0] + 1, 47, &out);
+	*fingerprint = out[0];
+	*hkey = out[1];
+}
+
 /**
  * key_hash - Compute hash of @key using MurmurHash3 algorithm
  */
 static uint64_t key_hash(const unsigned char *key)
 {
-	uint64_t out[2];
-	MurmurHash3_x64_128(key, (int)key[0] + 1, 47, &out);
-	return out[1];
+	uint64_t hkey;
+	uint32_t fingerprint;
+	hash(key, &hkey, &fingerprint);
+	return hkey;
 }
 
 /**
@@ -204,17 +218,6 @@ static uint64_t shrink_required_page(const struct hash_table *ht)
 }
 
 /**
- * hash_del - Del @key from @ht
- * 
- * Note: caller should make sure @key has been added to @ht
- */
-void hash_del(struct hash_table *ht, const unsigned char *key)
-{
-	ht->n--;
-	hlist_del(key_to_node(key));
-}
-
-/**
  * hash_resize_page - Return required pages for hash table resize
  */
 uint64_t hash_resize_page(struct hash_table *ht)
@@ -241,6 +244,49 @@ void hash_resize(struct hash_table *ht, uint64_t page, void *new)
 	ht->migrated = 0;
 	ht->mask = PAGE_TO_MASK(page);
 	ht->buckets = new;
+	ht->ghost = (void *)((char *)new + GHOST_OFFSET(page));
 	for (uint64_t i = 0; i <= ht->mask; i++)
 		hlist_head_init(&ht->buckets[i]);
+}
+
+bool hash_ghost(const struct hash_table *ht, const unsigned char *key)
+{
+	uint64_t hkey;
+	uint32_t fingerprint;
+	hash(key, &hkey, &fingerprint);
+
+	uint32_t *g = ht->ghost[hkey & ht->mask];
+	if ((*g >> 3) == (fingerprint >> 3))
+		return true;
+
+	for (int i = 1; i < 6; i++) {
+		if (*(g + i) == fingerprint)
+			return true;
+	}
+	return false;
+}
+
+static void hash_add_ghost(struct hash_table *ht, const unsigned char *key)
+{
+	uint64_t hkey;
+	uint32_t fingerprint;
+	hash(key, &hkey, &fingerprint);
+
+	static const uint8_t next[8] = {1, 2, 3, 4, 5, 0, 0, 0};
+	uint32_t *g = ht->ghost[hkey & ht->mask];
+	uint8_t i = *g & 7;
+	*(g+i) = fingerprint;
+	*g = (*g & ~7) | next[i];
+}
+
+/**
+ * hash_del - Del @key from @ht
+ * 
+ * Note: caller should make sure @key has been added to @ht
+ */
+void hash_del(struct hash_table *ht, const unsigned char *key)
+{
+	ht->n--;
+	hlist_del(key_to_node(key));
+	hash_add_ghost(ht, key);
 }

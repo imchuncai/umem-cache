@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #ifndef __UMEM_CACHE_LIST_H
 #define __UMEM_CACHE_LIST_H
@@ -137,16 +137,6 @@ static inline void list_lru_add(struct list_head *head, struct list_head *new)
 static inline void list_lru_del(struct list_head *node)
 {
 	list_del(node);
-}
-
-/**
- * list_lru_touch - Touch @node
- */
-static inline void list_lru_touch(struct list_head *head,
-				  struct list_head *node)
-{
-	list_lru_del(node);
-	list_lru_add(head, node);
 }
 
 /**

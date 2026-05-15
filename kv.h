@@ -34,7 +34,9 @@ struct kv {
 	struct slab_obj_offset soo;
 	struct list_head lru;
 	struct hlist_head borrower_list;
-	uint64_t val_size;
+
+	uint64_t on_s_lru : 1;
+	uint64_t val_size : 63;
 
 	struct hlist_node hash_node;
 	unsigned char data[];

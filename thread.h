@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #ifndef __UMEM_CACHE_THREAD_H
 #define __UMEM_CACHE_THREAD_H
@@ -22,7 +22,9 @@ static_assert(THREAD_MAX_CONN <= INT32_MAX);
  * @__warmed_up: used for cluster growth. we call thread is warmed up once we
  * reclaim memory from it, be aware of main thread will read it.
  * @memory: memory manager
- * @lru_head: lru of all enabled kv
+ * @s_lru_size: number of enabled kv on s_lru
+ * @s_lru_head: for S3-FIFO algorithm and enabled kv only
+ * @m_lru_head: for S3-FIFO algorithm and enabled kv only
  * @hash_table: hash table used to index kv or conn
  * @kv_cache_list: the list of kv_cache manages memory for kv and concat_val
  */
@@ -33,7 +35,9 @@ struct thread {
 #endif
 
 	struct memory memory;
-	struct list_head lru_head;
+	uint64_t s_lru_size;
+	struct list_head s_lru_head;
+	struct list_head m_lru_head;
 	struct hash_table hash_table;
 	struct hlist_head clock_list;
 	struct kv_cache kv_cache_list[KV_CACHE_LEN];

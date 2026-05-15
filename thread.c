@@ -164,7 +164,14 @@ static void kv_enable(struct thread *t, struct conn *conn)
 	kv->hash_node = conn->hash_node;
 	hlist_node_fix(&kv->hash_node);
 	
-	list_lru_add(&t->lru_head, &kv->lru);
+	if (hash_ghost(&t->hash_table, KV_KEY(kv))) {
+		kv->on_s_lru = 0;
+		list_lru_add(&t->m_lru_head, &kv->lru);
+	} else {
+		t->s_lru_size++;
+		kv->on_s_lru = 1;
+		list_lru_add(&t->s_lru_head, &kv->lru);
+	}
 }
 
 /**
@@ -176,6 +183,7 @@ static void kv_disable(struct thread *t, struct kv *kv)
 {
 	assert(kv_enabled(kv));
 	list_lru_del(&kv->lru);
+	t->s_lru_size -= kv->on_s_lru;
 	hash_del(&t->hash_table, KV_KEY(kv));
 	kv_set_fake(kv);
 }
@@ -211,11 +219,15 @@ static bool reclaim_lru(struct thread *t)
 	warmed_up(t);
 #endif
 
-	if (list_empty(&t->lru_head))
+	struct list_head *lru_head;
+	if (t->s_lru_size > t->hash_table.n / 10)
+		lru_head = &t->s_lru_head;
+	else if (!list_empty(&t->m_lru_head))
+		lru_head = &t->m_lru_head;
+	else
 		return false;
 
-	struct list_head *entry = list_lru_peek(&t->lru_head);
-	struct kv *kv = container_of(entry, struct kv, lru);
+	struct kv *kv = container_of(list_lru_peek(lru_head), struct kv, lru);
 	kv_disable(t, kv);
 	/**
 	 * Note: why the coldest kv have a borrower?
@@ -358,7 +370,10 @@ static void conn_borrow_kv(struct thread *t, struct conn *conn, struct kv *kv)
 {
 	assert(kv_enabled(kv));
 	kv_borrow(kv, &conn->kv_borrower);
-	list_lru_touch(&t->lru_head, &kv->lru);
+	list_lru_del(&kv->lru);
+	list_lru_add(&t->m_lru_head, &kv->lru);
+	t->s_lru_size -= kv->on_s_lru;
+	kv->on_s_lru = 0;
 }
 
 static void conn_return_kv(struct thread *t, struct conn *conn)
@@ -619,7 +634,8 @@ static void change_to_out_success(struct thread *t, struct conn *conn)
 
 static void state_get_out_hit(struct thread *t, struct conn *conn)
 {
-	debug_printf("CONN_STATE_GET_OUT_HIT: %lu\n", conn_kv(conn)->val_size);
+	debug_printf("CONN_STATE_GET_OUT_HIT: %lu\n",
+					(uint64_t)conn_kv(conn)->val_size);
 
 	uint64_t written = GET_RES_SIZE + conn_kv(conn)->val_size - conn->unio;
 	struct iovec iov[3];
@@ -928,7 +944,9 @@ static bool thread_init(struct thread *t)
 	t->__warmed_up = false;
 #endif
 	memory_init(&t->memory, THREAD_MAX_MEM >> PAGE_SHIFT);
-	list_head_init(&t->lru_head);
+	t->s_lru_size = 0;
+	list_head_init(&t->s_lru_head);
+	list_head_init(&t->m_lru_head);
 	hlist_head_init(&t->clock_list);
 	t->epfd = epoll_create1(0);
 	if (t->epfd == -1)
