@@ -220,7 +220,7 @@ static bool reclaim_lru(struct thread *t)
 #endif
 
 	struct list_head *lru_head;
-	if (t->s_lru_size > t->hash_table.n / 10)
+	if (t->s_lru_size * 10 > t->hash_table.n)
 		lru_head = &t->s_lru_head;
 	else if (!list_empty(&t->m_lru_head))
 		lru_head = &t->m_lru_head;
