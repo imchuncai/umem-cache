@@ -10,11 +10,11 @@
 #include "config.h"
 
 static_assert(sizeof(((struct hash_table *)0)->buckets) == 8);
-#define PAGE_TO_MASK(page)	(((page) << (PAGE_SHIFT - 3 - 2)) - 1)
-#define MASK_TO_PAGE(mask)	(((mask) + 1) >> (PAGE_SHIFT - 3 - 2))
-#define MIN_PAGE		4
+#define MIN_PAGE		9
 #define MIN_MASK		PAGE_TO_MASK(MIN_PAGE)
-#define GHOST_OFFSET(page)	((page) << (PAGE_SHIFT - 2))
+#define PAGE_TO_MASK(page)	((((page) / MIN_PAGE) << (PAGE_SHIFT - 3)) - 1)
+#define MASK_TO_PAGE(mask)	((((mask) + 1) * MIN_PAGE) >> (PAGE_SHIFT - 3))
+#define GHOST_OFFSET(page)	(((page) / MIN_PAGE) << PAGE_SHIFT)
 
 static const unsigned char *node_to_key(const struct hlist_node *node)
 {
@@ -256,10 +256,10 @@ bool hash_ghost(const struct hash_table *ht, const unsigned char *key)
 	hash(key, &hkey, &fingerprint);
 
 	uint32_t *g = ht->ghost[hkey & ht->mask];
-	if ((*g >> 3) == (fingerprint >> 3))
+	if ((*g >> 4) == (fingerprint >> 4))
 		return true;
 
-	for (int i = 1; i < 6; i++) {
+	for (int i = 1; i < 16; i++) {
 		if (*(g + i) == fingerprint)
 			return true;
 	}
@@ -272,11 +272,10 @@ static void hash_add_ghost(struct hash_table *ht, const unsigned char *key)
 	uint32_t fingerprint;
 	hash(key, &hkey, &fingerprint);
 
-	static const uint8_t next[8] = {1, 2, 3, 4, 5, 0, 0, 0};
 	uint32_t *g = ht->ghost[hkey & ht->mask];
-	uint8_t i = *g & 7;
+	uint8_t i = *g & 15;
 	*(g+i) = fingerprint;
-	*g = (*g & ~7) | next[i];
+	*g = (*g & ~15) | ((i + 1) & 15);
 }
 
 /**

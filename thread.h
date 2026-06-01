@@ -18,6 +18,7 @@ static_assert(THREAD_MAX_CONN <= INT32_MAX);
 
 /**
  * thread -
+ * @hash_table: hash table used to index kv or conn
  * @epfd: the epoll file descriptor that manages IO events for this thread
  * @__warmed_up: used for cluster growth. we call thread is warmed up once we
  * reclaim memory from it, be aware of main thread will read it.
@@ -25,10 +26,10 @@ static_assert(THREAD_MAX_CONN <= INT32_MAX);
  * @s_lru_size: number of enabled kv on s_lru
  * @s_lru_head: for S3-FIFO algorithm and enabled kv only
  * @m_lru_head: for S3-FIFO algorithm and enabled kv only
- * @hash_table: hash table used to index kv or conn
  * @kv_cache_list: the list of kv_cache manages memory for kv and concat_val
  */
 struct thread {
+	struct hash_table hash_table;
 	int epfd;
 #ifdef CONFIG_RAFT
 	bool __warmed_up;
@@ -38,7 +39,6 @@ struct thread {
 	uint64_t s_lru_size;
 	struct list_head s_lru_head;
 	struct list_head m_lru_head;
-	struct hash_table hash_table;
 	struct hlist_head clock_list;
 	struct kv_cache kv_cache_list[KV_CACHE_LEN];
 
