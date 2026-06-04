@@ -7,12 +7,16 @@
 #include "memory.h"
 #include "list.h"
 
+#define BUCKET_GHOST_SHIFT	4
+#define BUCKET_GHOST		(1 << BUCKET_GHOST_SHIFT)
+#define BUCKET_GHOST_MASK	(BUCKET_GHOST - 1)
+
 /**
  * hash_table - A hash table for index keys
- * @ghost: for S3-FIFO algorithm
  * @n: number of keys in hash table
  * @mask: determined the size of @buckets
  * @buckets: bucket array, which size is power of 2
+ * @ghost: for S3-FIFO algorithm
  * @old_buckets: if it is not NULL, the hash table is under migrating
  * @old_mask: determined the size of @old_buckets
  * @migrated: number of buckets have migrated
@@ -20,10 +24,10 @@
  * Note: we try to keep (@mask * 2 <= @n <= @mask * 8)
  */
 struct hash_table {
-	uint32_t (*ghost)[16] __attribute__((aligned(64)));
 	uint64_t n;
 	uint64_t mask;
 	struct hlist_head *buckets;
+	uint32_t (*ghost)[BUCKET_GHOST];
 
 	struct hlist_head *old_buckets;
 	uint64_t old_mask;

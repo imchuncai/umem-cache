@@ -118,8 +118,9 @@ static void conn_free(struct thread *t, struct conn *conn)
  */
 static bool thread_range(void *ptr)
 {
-	return ptr >= (void *)threads &&
-	       ptr < (void *)(threads + CONFIG_THREAD_NR);
+	// Note: must convert to (uintptr_t), or the behavior is undefined.
+	return (uintptr_t)ptr >= (uintptr_t)threads &&
+	       (uintptr_t)ptr < (uintptr_t)(threads + CONFIG_THREAD_NR);
 }
 
 /**

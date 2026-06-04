@@ -10,7 +10,7 @@
 #include "config.h"
 
 static_assert(sizeof(((struct hash_table *)0)->buckets) == 8);
-#define MIN_PAGE		9
+#define MIN_PAGE		(1 + BUCKET_GHOST / 2)
 #define MIN_MASK		PAGE_TO_MASK(MIN_PAGE)
 #define PAGE_TO_MASK(page)	((((page) / MIN_PAGE) << (PAGE_SHIFT - 3)) - 1)
 #define MASK_TO_PAGE(mask)	((((mask) + 1) * MIN_PAGE) >> (PAGE_SHIFT - 3))
@@ -256,14 +256,11 @@ bool hash_ghost(const struct hash_table *ht, const unsigned char *key)
 	hash(key, &hkey, &fingerprint);
 
 	uint32_t *g = ht->ghost[hkey & ht->mask];
-	if ((*g >> 4) == (fingerprint >> 4))
-		return true;
-
-	for (int i = 1; i < 16; i++) {
+	for (int i = 1; i < BUCKET_GHOST; i++) {
 		if (*(g + i) == fingerprint)
 			return true;
 	}
-	return false;
+	return (*g >> BUCKET_GHOST_SHIFT) == (fingerprint >> BUCKET_GHOST_SHIFT);
 }
 
 static void hash_add_ghost(struct hash_table *ht, const unsigned char *key)
@@ -273,9 +270,9 @@ static void hash_add_ghost(struct hash_table *ht, const unsigned char *key)
 	hash(key, &hkey, &fingerprint);
 
 	uint32_t *g = ht->ghost[hkey & ht->mask];
-	uint8_t i = *g & 15;
+	uint8_t i = *g & BUCKET_GHOST_MASK;
 	*(g+i) = fingerprint;
-	*g = (*g & ~15) | ((i + 1) & 15);
+	*g = (*g & ~BUCKET_GHOST_MASK) | ((i + 1) & BUCKET_GHOST_MASK);
 }
 
 /**

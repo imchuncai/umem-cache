@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -25,7 +25,7 @@ static void *sys_malloc(uint64_t page)
 {
 	size_t len = page << PAGE_SHIFT;
 	int prot = PROT_READ | PROT_WRITE;
-	int flags = MAP_ANONYMOUS | MAP_PRIVATE;
+	int flags = MAP_ANONYMOUS | MAP_PRIVATE | MAP_POPULATE;
 	/* manual says ptr will not be NULL, if you not insist. */
 	void *ptr = mmap(NULL, len, prot, flags, -1, 0);
 	if (ptr == MAP_FAILED)

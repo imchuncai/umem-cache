@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #ifndef __UMEM_CACHE_CONFIG_H
 #define __UMEM_CACHE_CONFIG_H
@@ -35,6 +35,7 @@
 
 /* (in bytes) */
 #define CONFIG_KEY_SIZE_MAX	UINT8_MAX
+#define CACHE_LINE_SIZE		128
 
 #define PAGE_SHIFT	12
 #define PAGE_MASK	((1 << PAGE_SHIFT) - 1)
