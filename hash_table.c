@@ -87,7 +87,7 @@ static uint64_t key_hash(const unsigned char *key)
  */
 static bool key_equal(const unsigned char *a, const unsigned char *b)
 {
-	return a[0] == b[0] && memcmp(a, b, a[0] + 1) == 0;
+	return memcmp(a, b, (a[0] & b[0]) + 1) == 0;
 }
 
 /**
