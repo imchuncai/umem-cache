@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #ifndef __UMEM_CACHE_CONN_H
 #define __UMEM_CACHE_CONN_H
@@ -26,10 +26,12 @@ enum conn_state {
 	CONN_STATE_OUT_SUCCESS		= (2 << 3) + EPOLLOUT,
 	CONN_STATE_GET_OUT_HIT		= (3 << 3) + EPOLLOUT,
 	
-	CONN_STATE_SET_DIVIDER		= (4 << 3) + 0,
-	CONN_STATE_GET_OUT_MISS		= (5 << 3) + EPOLLOUT,
-	CONN_STATE_SET_IN_VALUE_SIZE	= (6 << 3) + EPOLLIN,
-	CONN_STATE_SET_IN_VALUE		= (7 << 3) + EPOLLIN,
+	CONN_STATE_FREE			= (4 << 3) + EPOLLIN,
+
+	CONN_STATE_SET_DIVIDER		= (5 << 3) + 0,
+	CONN_STATE_GET_OUT_MISS		= (6 << 3) + EPOLLOUT,
+	CONN_STATE_SET_IN_VALUE_SIZE	= (7 << 3) + EPOLLIN,
+	CONN_STATE_SET_IN_VALUE		= (8 << 3) + EPOLLIN,
 } __attribute__((__packed__));
 
 /**

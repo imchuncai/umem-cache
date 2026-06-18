@@ -427,9 +427,9 @@ static void thread_accept(struct thread *t, int sockfd)
 		struct epoll_event event;
 		event.events = EPOLLIN | EPOLLOUT | EPOLLET;
 		event.data.ptr = conn;
-		int ret = epoll_ctl(t->epfd, EPOLL_CTL_MOD, conn->sockfd, &event);
-		if (ret != 0)
-			conn_free(t, conn);
+		int ret __attribute__((unused));
+		ret = epoll_ctl(t->epfd, EPOLL_CTL_MOD, conn->sockfd, &event);
+		assert(ret == 0);
 	} else {
 		close(sockfd);
 	}
@@ -609,8 +609,6 @@ static bool conn_write_byte(struct thread *t, struct conn *conn, char b)
 
 static void change_to_in_cmd(struct conn *conn)
 {
-	assert(conn->state == CONN_STATE_OUT_SUCCESS ||
-	       conn->state == CONN_STATE_GET_OUT_HIT);
 	assert(conn_kv(conn) == NULL);
 	conn->state = CONN_STATE_IN_CMD;
 	conn->unio = CMD_SIZE_MAX;
@@ -681,61 +679,6 @@ static void conn_unlock_key_for_success(struct thread *t, struct conn *conn)
 	conn_return_kv(t, conn);
 }
 
-static void change_to_set_in_value_success(struct thread *t, struct conn *conn)
-{
-	conn_unlock_key_for_success(t, conn);
-
-	uint64_t page = hash_resize_page(&t->hash_table);
-	if (page > 0) {
-		void *new = memory_malloc_advance(t, page);
-		if (new)
-			hash_resize(&t->hash_table, page, new);
-	}
-
-	change_to_out_success(t, conn);
-}
-
-static void state_set_in_value(struct thread *t, struct conn *conn)
-{
-	debug_printf("CONN_STATE_SET_IN_VALUE:\n");
-	
-	uint64_t readed = conn_kv(conn)->val_size - conn->unio;
-	struct iovec iov[2];
-	int iov_len = kv_val_to_iovec(conn_kv(conn), readed, iov);
-	if (conn_full_read_msg(t, conn, iov, iov_len))
-		change_to_set_in_value_success(t, conn);
-}
-
-static void change_to_set_in_value(struct thread *t, struct conn *conn)
-{
-	if (conn_kv(conn)->val_size == 0) {
-		change_to_set_in_value_success(t, conn);
-	} else {
-		conn->state = CONN_STATE_SET_IN_VALUE;
-		conn->unio = conn_kv(conn)->val_size;
-		state_set_in_value(t, conn);
-	}
-}
-
-static void state_set_in_value_size(struct thread *t, struct conn *conn)
-{
-	debug_printf("CONN_STATE_SET_IN_VALUE_SIZE:\n");
-
-	uint64_t readed = SET_REQ_SIZE - conn->unio;
-	if (!conn_full_read(t, conn, conn->buffer + readed))
-		return;
-
-	conn->val_size = ntohll(conn->size);
-	struct kv *kv = kv_malloc(t, conn->key, conn->val_size);
-	if (kv) {
-		kv_init(kv, conn->key, conn->val_size);
-		kv_borrow(kv, &conn->kv_borrower);
-		change_to_set_in_value(t, conn);
-	} else {
-		free_conn(t, conn);
-	}
-}
-
 static void change_to_set_in_value_size(struct conn *conn)
 {
 	conn->state = CONN_STATE_SET_IN_VALUE_SIZE;
@@ -787,7 +730,8 @@ static void cmd_del(struct thread *t, struct conn *conn)
 	} else if (thread_range(node)) {
 		struct conn *lock_conn = container_of(node, struct conn, hash_node);
 		assert(conn_with_key_locked(lock_conn));
-		free_conn(t, lock_conn);
+		conn_unlock_key_for_failure(t, lock_conn);
+		lock_conn->state = CONN_STATE_FREE;
 	} else {
 		struct kv *kv = container_of(node, struct kv, hash_node);
 		kv_disable(t, kv);
@@ -828,6 +772,62 @@ static void state_in_cmd(struct thread *t, struct conn *conn)
 	}
 }
 
+static void change_to_set_in_value_success(struct thread *t, struct conn *conn)
+{
+	conn_unlock_key_for_success(t, conn);
+
+	uint64_t page = hash_resize_page(&t->hash_table);
+	if (page > 0) {
+		void *new = memory_malloc_advance(t, page);
+		if (new)
+			hash_resize(&t->hash_table, page, new);
+	}
+
+	change_to_in_cmd(conn);
+	state_in_cmd(t, conn);
+}
+
+static void state_set_in_value(struct thread *t, struct conn *conn)
+{
+	debug_printf("CONN_STATE_SET_IN_VALUE:\n");
+	
+	uint64_t readed = conn_kv(conn)->val_size - conn->unio;
+	struct iovec iov[2];
+	int iov_len = kv_val_to_iovec(conn_kv(conn), readed, iov);
+	if (conn_full_read_msg(t, conn, iov, iov_len))
+		change_to_set_in_value_success(t, conn);
+}
+
+static void change_to_set_in_value(struct thread *t, struct conn *conn)
+{
+	if (conn_kv(conn)->val_size == 0) {
+		change_to_set_in_value_success(t, conn);
+	} else {
+		conn->state = CONN_STATE_SET_IN_VALUE;
+		conn->unio = conn_kv(conn)->val_size;
+		state_set_in_value(t, conn);
+	}
+}
+
+static void state_set_in_value_size(struct thread *t, struct conn *conn)
+{
+	debug_printf("CONN_STATE_SET_IN_VALUE_SIZE:\n");
+
+	uint64_t readed = SET_REQ_SIZE - conn->unio;
+	if (!conn_full_read(t, conn, conn->buffer + readed))
+		return;
+
+	conn->val_size = ntohll(conn->size);
+	struct kv *kv = kv_malloc(t, conn->key, conn->val_size);
+	if (kv) {
+		kv_init(kv, conn->key, conn->val_size);
+		kv_borrow(kv, &conn->kv_borrower);
+		change_to_set_in_value(t, conn);
+	} else {
+		free_conn(t, conn);
+	}
+}
+
 static void process_conn(struct thread *t, struct conn *conn)
 {
 	switch (conn->state) {
@@ -839,6 +839,10 @@ static void process_conn(struct thread *t, struct conn *conn)
 		break;
 	case CONN_STATE_GET_OUT_HIT:
 		state_get_out_hit(t, conn);
+		break;
+
+	case CONN_STATE_FREE:
+		conn_free(t, conn);
 		break;
 
 	case CONN_STATE_GET_OUT_MISS:

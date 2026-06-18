@@ -8,7 +8,9 @@ UMEM-CACHE
 UMEM-CACHE是一个用户空间键值对缓存，它是多线程的、无锁的，并且包含了内置的反缓存击穿，tls加密
 和raft集群方案。
 
-如果在特定基准测试中发现UMEM-CACHE比REDIS快100%，请不必过于惊讶。
+在使用Zipf分布数据的基准测试中，UMEM-CACHE 在命中率和命中吞吐量方面均显著优于Memcached和
+Redis。启用tls后，其优势更加明显。如果在特定基准测试中发现UMEM-CACHE比REDIS快100%，
+请不必过于惊讶。
 
 Multilingual 多语言
 ==================
@@ -206,7 +208,7 @@ AUTHORITY
 ---------
 ::
 
-                               [ ASYNC  ] [  ASYNC   ]
+	                       [ ASYNC  ] [  ASYNC   ]
 	[  OUT  ]              [  OUT   ]
 	[command] [=APPROVAL=] [reserved] [=APPROVAL=]
 	[   1   ]              [   1    ]
@@ -228,24 +230,14 @@ AUTHORITY
 	[command] [key-size] [  key   ]
 	[   1   ] [   1    ] [key-size]
 
-=SET=
------
-::
-
-	[          OUT          ] [ IN  ]
-	[value-size] [  value   ] [error]
-	[    8     ] [value-size] [  1  ]
-
-	注意：[error]总是0
-
 CMD-GET-OR-SET
 --------------
 ::
 
-				     [[error] == 0] [[error] == 1]
-		[        IN        ] [     IN     ]
-	[=CMD=] [value-size] [error] [   value    ] [   =SET=    ]
-		[    8     ] [  1  ] [ value-size ]
+	                           [[hit] == 0] [      [hit] == 1       ]
+	        [       IN       ] [    IN    ] [          OUT          ]
+	[=CMD=] [value-size] [hit] [  value   ] [value-size] [  value   ]
+	        [    8     ] [ 1 ] [value-size] [    8     ] [value-size]
 
 CMD-DEL
 -------

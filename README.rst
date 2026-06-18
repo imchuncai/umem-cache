@@ -8,8 +8,10 @@ UMEM-CACHE
 UMEM-CACHE is a key/value memory cache work in user space, it is multi-threaded,
 lock-free, and has built-in anti-dogpiling, tls and raft cluster solution.
 
-Don't be surprised if you see UMEM-CACHE performing 100% faster than REDIS in
-certain benchmarks.
+In benchmark tests using Zipf distributed data, UMEM-CACHE significantly
+outperformed Memcached and Redis in both hit rate and hit throughput. Its
+advantages became even more pronounced after enabling tls. Don't be surprised
+if you see UMEM-CACHE performing 100% faster than REDIS in certain benchmarks.
 
 Multilingual 多语言
 ==================
@@ -215,7 +217,7 @@ AUTHORITY
 ---------
 ::
 
-                               [    ASYNC    ] [  ASYNC   ]
+	                       [    ASYNC    ] [  ASYNC   ]
 	[  OUT  ]              [     OUT     ]
 	[command] [=APPROVAL=] [request-count] [=APPROVAL=]
 	[   1   ]              [      1      ]
@@ -235,30 +237,20 @@ Use the following protocol to interact with the thread after connecting to the t
 	[command] [key-size] [  key   ]
 	[   1   ] [   1    ] [key-size]
 
-=SET=
------
-::
-
-	[          OUT          ] [ IN  ]
-	[value-size] [  value   ] [error]
-	[    8     ] [value-size] [  1  ]
-
-	NOTE: [error] is always 0
-
 CMD-GET-OR-SET
 --------------
 ::
 
-				     [[error] == 0] [[error] == 1]
-		[        IN        ] [     IN     ]
-	[=CMD=] [value-size] [error] [   value    ] [   =SET=    ]
-		[    8     ] [  1  ] [ value-size ]
+	                           [[hit] == 0] [      [hit] == 1       ]
+	        [       IN       ] [    IN    ] [          OUT          ]
+	[=CMD=] [value-size] [hit] [  value   ] [value-size] [  value   ]
+	        [    8     ] [ 1 ] [value-size] [    8     ] [value-size]
 
 CMD-DEL
 -------
 ::
 
-                [ IN  ]
+	        [ IN  ]
 	[=CMD=] [error]
 	        [  1  ]
 
