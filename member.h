@@ -17,7 +17,7 @@ struct member {
 	in_port_t sin6_port;
 	struct in6_addr sin6_addr;
 	bool available;
-	bool available_since_last_timer_event;
+	bool responded_append_entry;
 
 	struct raft_conn conn;
 	uint64_t append_entry_round;

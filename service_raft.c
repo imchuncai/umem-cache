@@ -30,6 +30,8 @@ enum server_state {
 /**
  * server -
  * @timer_ticks: +1 when received timer event
+ * 
+ * Note: the word entry means a heartbeat or a log
  */
 struct server {
 	int epfd;
@@ -283,6 +285,7 @@ static bool leader_replace_log(struct server *s, struct log *new)
 		server_replace_log(s, new);
 		server_replace_cluster(s, cl);
 		s->leader.replicate_entry = true;
+		s->leader.entry_commited = true;
 	}
 	return cl;
 }
@@ -806,7 +809,6 @@ static void change_to_heartbeat_out(struct server *s, struct raft_conn *conn)
 static void change_to_append_entry_out(struct server *s, struct member *member)
 {
 	assert(s->state == SERVER_STATE_LEADER);
-	member->available_since_last_timer_event = true;
 	member->append_entry_round = s->leader.replicate_entry_round;
 
 	if (member->next_index <= s->log->index)
@@ -837,6 +839,7 @@ static void state_append_entry_in(struct server *s, struct raft_conn *conn)
 	assert(term == s->current_term && s->state == SERVER_STATE_LEADER);
 
 	struct member *member = container_of(conn, struct member, conn);
+	member->responded_append_entry = true;
 	if (state == RAFT_CONN_STATE_APPEND_LOG_IN)
 		member->next_index++;
 
@@ -1132,7 +1135,8 @@ static void change_to_ready_for_use(struct server *s, struct raft_conn *conn)
 	switch (s->state) {
 	case SERVER_STATE_LEADER:
 		struct member *m = container_of(conn, struct member, conn);
-		change_to_append_entry_out(s, m);
+		if (!m->responded_append_entry)
+			change_to_append_entry_out(s, m);
 		break;
 	case SERVER_STATE_CANDIDATE:
 		change_to_request_vote_out(s, conn);
@@ -1270,6 +1274,7 @@ static void replicate_entry(struct server *s)
 
 	for (uint32_t i = 0; i < cl->members_n; i++) {
 		struct member *m = cl->members + i;
+		m->responded_append_entry = false;
 		switch (m->conn.state) {
 		case RAFT_CONN_STATE_READY_FOR_USE:
 			change_to_append_entry_out(s, m);
@@ -1337,6 +1342,11 @@ static void start_election(struct server *s)
 	convert_to_candidate(s);
 }
 
+/**
+ * leader_timer_ticked - Check leader authority and member availability
+ * 
+ * @return: true if leader can reach majority of the members, false otherwise
+ */
 static bool leader_timer_ticked(struct server *s)
 {
 	bool available_changed = !s->leader.available;
@@ -1345,7 +1355,7 @@ static bool leader_timer_ticked(struct server *s)
 	uint32_t new_available = 0;
 	for (uint64_t i = 0; i < cl->members_n; i++) {
 		struct member *m = cl->members + i;
-		if (m->available_since_last_timer_event == m->available) {
+		if (m->responded_append_entry == m->available) {
 			m->unstable_round = 0;
 		} else {
 			m->unstable_round++;
@@ -1355,7 +1365,6 @@ static bool leader_timer_ticked(struct server *s)
 				available_changed = true;
 			}
 		}
-		m->available_since_last_timer_event = false;
 
 		if (m->available) {
 			if (m->type & MEMBER_TYPE_OLD)
@@ -1369,6 +1378,12 @@ static bool leader_timer_ticked(struct server *s)
 	if (old_available < cl->require_old_votes ||
 	    new_available < cl->require_new_votes) {
 		return false;
+	}
+
+	for (uint64_t i = 0; i < cl->members_n; i++) {
+		struct member *m = cl->members + i;
+		if (m->conn.state == RAFT_CONN_STATE_NOT_CONNECTED)
+			member_connect(s, m);
 	}
 
 	if ((s->log->type & LOG_TYPE_UNSTABLE_MASK) == 0 && available_changed) {
