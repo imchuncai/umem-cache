@@ -3,6 +3,7 @@
 
 #include <unistd.h>
 #include <errno.h>
+#include "service.h"
 #include "thread.h"
 #include "encoding.h"
 #include "socket.h"
@@ -63,7 +64,7 @@ static bool service_conn_full_read_connect_in(struct service_conn *conn)
 		}
 	}
 
-	if (!(n == -1 && errno == EWOULDBLOCK))
+	if (n == 0 || errno != EWOULDBLOCK)
 		service_conn_free(conn);
 
 	return false;
@@ -114,6 +115,9 @@ static void read_thread_info(struct service_conn *conn, int epfd)
 
 	epoll_del(epfd, conn->sockfd);
 	thread_dispatch(thread_id, conn->sockfd);
+#ifdef CONFIG_KERNEL_TLS
+	assert(conn->session.session == NULL);
+#endif
 	free(conn);
 }
 
@@ -125,12 +129,12 @@ static void read_thread_info(struct service_conn *conn, int epfd)
 static bool accept_new_conn(int sockfd, int epfd)
 {
 	while (true) {
-		struct in6_addr sin6_addr;
-		int fd = accept2(sockfd, &sin6_addr);
+		struct in6_addr peer;
+		int fd = accept2(sockfd, &peer);
 		if (fd == -1)
 			return errno == EWOULDBLOCK;
 
-		struct service_conn *conn = service_conn_malloc(fd, sin6_addr);
+		struct service_conn *conn = service_conn_malloc(fd, peer);
 		if (conn == NULL)
 			close(fd);
 		else if (!__epoll_add(epfd, fd, (uint64_t)conn, EPOLL_EVENTS))
@@ -138,8 +142,8 @@ static bool accept_new_conn(int sockfd, int epfd)
 	}
 }
 
-#define SERVER_MAX_EPOLL_EVENTS	64
-static struct epoll_event events[SERVER_MAX_EPOLL_EVENTS];
+#define MAX_EPOLL_EVENTS 64
+static struct epoll_event events[MAX_EPOLL_EVENTS];
 
 void must_service_run(int port)
 {
@@ -157,9 +161,9 @@ void must_service_run(int port)
 			sleep(3);
 			sockfd = listen_port(port, epfd, 0);
 			/* in case listen failed, don't wait epoll */
-			n = epoll_wait(epfd, events, SERVER_MAX_EPOLL_EVENTS, 0);
+			n = epoll_wait(epfd, events, MAX_EPOLL_EVENTS, 0);
 		} else {
-			n = epoll_wait(epfd, events, SERVER_MAX_EPOLL_EVENTS, -1);
+			n = epoll_wait(epfd, events, MAX_EPOLL_EVENTS, -1);
 		}
 
 		for (int i = 0; i < n; i++) {

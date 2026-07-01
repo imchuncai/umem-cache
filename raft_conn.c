@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <sys/socket.h>
 #include <stdlib.h>
@@ -132,7 +132,7 @@ void raft_conn_free_or_clear(struct raft_conn *conn)
 		raft_conn_free(conn);
 }
 
-static bool conn_check_io(struct raft_conn *conn, ssize_t n)
+static bool conn_check_read(struct raft_conn *conn, ssize_t n)
 {
 	if (n > 0) {
 		assert(conn->unio >= (size_t)n);
@@ -140,22 +140,10 @@ static bool conn_check_io(struct raft_conn *conn, ssize_t n)
 		return true;
 	}
 
-	if (!(n == -1 && errno == EWOULDBLOCK))
+	if (n == 0 || errno != EWOULDBLOCK)
 		raft_conn_free_or_clear(conn);
 
 	return false;
-}
-
-/**
- * conn_write - Write from @buffer to @conn
- * 
- * @return: true on something is written, false on nothing is written
- */
-static bool conn_write(struct raft_conn *conn, const unsigned char *buffer)
-{
-	assert(conn->unio > 0);
-	ssize_t n = send(conn->sockfd, buffer, conn->unio, MSG_NOSIGNAL);
-	return conn_check_io(conn, n);
 }
 
 /**
@@ -167,7 +155,7 @@ bool raft_conn_read(struct raft_conn *conn, unsigned char *buffer)
 {
 	assert(conn->unio > 0);
 	ssize_t n = read(conn->sockfd, buffer, conn->unio);
-	return conn_check_io(conn, n);
+	return conn_check_read(conn, n);
 }
 
 /**
@@ -189,6 +177,33 @@ bool raft_conn_full_read_to_buffer(struct raft_conn *conn, uint64_t size)
 {
 	uint64_t readed = size - conn->unio;
 	return raft_conn_full_read(conn, conn->buffer + readed);
+}
+
+static bool conn_check_write(struct raft_conn *conn, ssize_t n)
+{
+	if (n > 0) {
+		assert(conn->unio >= (size_t)n);
+		conn->unio -= n;
+		return true;
+	}
+
+	assert(n == -1);
+	if (errno != EWOULDBLOCK)
+		raft_conn_free_or_clear(conn);
+
+	return false;
+}
+
+/**
+ * conn_write - Write from @buffer to @conn
+ * 
+ * @return: true on something is written, false on nothing is written
+ */
+static bool conn_write(struct raft_conn *conn, const unsigned char *buffer)
+{
+	assert(conn->unio > 0);
+	ssize_t n = send(conn->sockfd, buffer, conn->unio, MSG_NOSIGNAL);
+	return conn_check_write(conn, n);
 }
 
 /**
@@ -213,23 +228,6 @@ bool raft_conn_full_write_buffer(struct raft_conn *conn, uint64_t size)
 }
 
 /**
- * raft_conn_write_byte - Write @b to @conn
- * 
- * @return: true on @b is written, false on nothing is written
- */
-bool raft_conn_write_byte(struct raft_conn *conn, char b)
-{
-	ssize_t n = send(conn->sockfd, &b, 1, MSG_NOSIGNAL);
-	if (n > 0)
-		return true;
-
-	if (!(n == -1 && errno == EWOULDBLOCK))
-		raft_conn_free_or_clear(conn);
-
-	return false;
-}
-
-/**
  * conn_write_msg - Write message from @iov to @conn
  * @iovlen: length of @iov
  * 
@@ -244,7 +242,7 @@ static bool conn_write_msg(
 
 	assert(conn->unio > 0);
 	ssize_t n = sendmsg(conn->sockfd, &msg, MSG_NOSIGNAL);
-	return conn_check_io(conn, n);
+	return conn_check_write(conn, n);
 }
 
 /**
@@ -257,4 +255,23 @@ bool raft_conn_full_write_msg(
 		struct raft_conn *conn, struct iovec *iov, size_t iovlen)
 {
 	return conn_write_msg(conn, iov, iovlen) && conn->unio == 0;
+}
+
+/**
+ * raft_conn_write_byte_zero - Write byte 0 to @conn
+ * 
+ * @return: true on byte 0 is written, false on nothing is written
+ */
+bool raft_conn_write_byte_zero(struct raft_conn *conn)
+{
+	static const unsigned char zero[1] = { 0 };
+	ssize_t n = send(conn->sockfd, &zero, 1, MSG_NOSIGNAL);
+	if (n > 0)
+		return true;
+
+	assert(n == -1);
+	if (errno != EWOULDBLOCK)
+		raft_conn_free_or_clear(conn);
+
+	return false;
 }

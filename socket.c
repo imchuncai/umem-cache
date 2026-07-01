@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <unistd.h>
 #include <netinet/tcp.h>
@@ -7,6 +7,12 @@
 #include "config.h"
 #include "epoll.h"
 
+/**
+ * listen_port - Listen on port @port and add sockfd to epfd
+ * @event_u64: epoll event
+ * 
+ * @return: sockfd on success, or -1 on failure
+ */
 int listen_port(int port, int epfd, uint64_t event_u64)
 {
 	int sockfd = socket(AF_INET6, SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);

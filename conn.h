@@ -25,13 +25,13 @@ enum conn_state {
 	CONN_STATE_GET_BLOCKED		= (1 << 3) + 0,
 	CONN_STATE_OUT_SUCCESS		= (2 << 3) + EPOLLOUT,
 	CONN_STATE_GET_OUT_HIT		= (3 << 3) + EPOLLOUT,
-	
-	CONN_STATE_FREE			= (4 << 3) + EPOLLIN,
 
-	CONN_STATE_SET_DIVIDER		= (5 << 3) + 0,
-	CONN_STATE_GET_OUT_MISS		= (6 << 3) + EPOLLOUT,
-	CONN_STATE_SET_IN_VALUE_SIZE	= (7 << 3) + EPOLLIN,
-	CONN_STATE_SET_IN_VALUE		= (8 << 3) + EPOLLIN,
+	CONN_STATE_FREE			= (4 << 3) + EPOLLIN,
+	/* Note: following states holds a kv lock */
+
+	CONN_STATE_GET_OUT_MISS		= (5 << 3) + EPOLLOUT,
+	CONN_STATE_SET_IN_VALUE_SIZE	= (6 << 3) + EPOLLIN,
+	CONN_STATE_SET_IN_VALUE		= (7 << 3) + EPOLLIN,
 } __attribute__((__packed__));
 
 /**
@@ -60,7 +60,7 @@ struct conn {
 	struct kv_borrower kv_borrower;
 	uint64_t val_size;
 	struct hlist_node clock_node;
-	struct list_head interest_list;
+	struct list_head interest;
 	uint64_t unio;
 	struct hlist_node hash_node;
 	unsigned char key[1 + CONFIG_KEY_SIZE_MAX];

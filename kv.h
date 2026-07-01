@@ -24,16 +24,19 @@ struct kv_borrower {
 /**
  * kv -
  * @soo: it has a trick involved, see kv_malloc() and kv_is_concat()
- * @lru: kv is on lru and is ready to serve command GET if kv_enabled()
  * @borrower_list: the list of kv_borrower
+ * @lru: kv is on lru and is ready to serve command GET if enabled
  * @val_size: value size
- * @hash_node: resides in a hash_table if kv_enabled()
+ * @hash_node: resides in a hash_table if enabled
  * @data: data of key and value
  */
 struct kv {
 	struct slab_obj_offset soo;
-	struct list_head lru;
 	struct hlist_head borrower_list;
+	union {
+		struct list_head lru;
+		uint64_t enabled;
+	};
 
 	uint64_t on_s_lru : 1;
 	uint64_t val_size : 63;
@@ -48,20 +51,19 @@ static_assert(offsetof(struct kv, data) - offsetof(struct kv, hash_node) ==
 /* memory migration requires this member shows first */
 static_assert(offsetof(struct kv, soo) == 0);
 
-#define KV_KEY(kv)		((kv)->data)
-#define KEY_SIZE(key)		(1 + (int)((key)[0]))
-#define KV_KEY_SIZE(kv)		KEY_SIZE(KV_KEY(kv))
-#define KV_VAL(kv)		((kv)->data + KV_KEY_SIZE(kv))
+#define KV_KEY(kv)	((kv)->data)
+#define KEY_SIZE(key)	(1 + (key)[0])
+#define KV_KEY_SIZE(kv)	KEY_SIZE(KV_KEY(kv))
+#define KV_VAL(kv)	((kv)->data + KV_KEY_SIZE(kv))
 #define KV_SIZE(kv)	(sizeof(struct kv) + KV_KEY_SIZE(kv) + (kv)->val_size)
 
 void kv_init(struct kv *kv, const unsigned char *key, uint64_t val_size);
-void kv_set_fake(struct kv *kv);
-bool kv_enabled(struct kv *kv);
 void kv_borrow(struct kv *kv, struct kv_borrower *borrower);
 void kv_return(struct kv_borrower *borrower);
 bool kv_is_concat(struct kv *kv);
 void kv_borrower_init(struct kv_borrower *borrower);
 bool kv_no_borrower(struct kv *kv);
 int kv_val_to_iovec(struct kv *kv, uint64_t i, struct iovec *iov);
+int kv_copy_val(struct kv *kv, unsigned char *buffer, uint64_t n);
 
 #endif

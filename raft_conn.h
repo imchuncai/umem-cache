@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #ifndef __UMEM_CACHE_RAFT_CONN_H
 #define __UMEM_CACHE_RAFT_CONN_H
@@ -95,7 +95,7 @@ bool raft_conn_read(struct raft_conn *conn, unsigned char *buffer);
 bool raft_conn_full_read(struct raft_conn *conn, unsigned char *buffer);
 bool raft_conn_full_read_to_buffer(struct raft_conn *conn, uint64_t size);
 bool raft_conn_full_write_buffer(struct raft_conn *conn, uint64_t size);
-bool raft_conn_write_byte(struct raft_conn *conn, char b);
+bool raft_conn_write_byte_zero(struct raft_conn *conn);
 bool raft_conn_full_write_msg(
 		struct raft_conn *conn, struct iovec *iov, size_t iovlen);
 

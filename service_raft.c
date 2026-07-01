@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include "service.h"
 #include "thread.h"
 #include "encoding.h"
 #include "epoll.h"
@@ -337,7 +338,7 @@ static void state_out_success(struct raft_conn *conn)
 {
 	debug_printf("RAFT_CONN_STATE_OUT_SUCCESS:\n");
 
-	if (raft_conn_write_byte(conn, 0))
+	if (raft_conn_write_byte_zero(conn))
 		change_to_in_cmd(conn);
 }
 

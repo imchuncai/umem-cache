@@ -4,7 +4,6 @@
 #ifndef __UMEM_CACHE_CONFIG_H
 #define __UMEM_CACHE_CONFIG_H
 
-#include <stdlib.h>
 #include <stdint.h>
 #include <assert.h>
 
@@ -44,14 +43,5 @@ static_assert(CONFIG_THREAD_NR > 0 && CONFIG_THREAD_NR <= INT32_MAX);
 static_assert(CONFIG_MAX_CONN > 0 && CONFIG_MAX_CONN <= INT32_MAX);
 static_assert(CONFIG_MEM_LIMIT > 0 && CONFIG_MEM_LIMIT <= INT64_MAX);
 static_assert(CONFIG_TCP_TIMEOUT > 0 && CONFIG_TCP_TIMEOUT <= UINT32_MAX);
-
-/**
- * must - Check x and abort() on false
- */
-static inline void must(bool x)
-{
-	if (!x)
-		abort();
-}
 
 #endif
