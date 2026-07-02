@@ -1,10 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (C) 2024-2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+# Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
-CFLAGS = -O3 -g -Wall -Wextra -flto=auto -fwhole-program -D_GNU_SOURCE
-
-# CFLAGS += -std=gnu23
-CFLAGS += -std=gnu11 -Dalignof=__alignof__ -include stdbool.h
+CFLAGS = -std=gnu11 -O3 -g -Wall -Wextra -flto=auto -fwhole-program	       \
+	-D_GNU_SOURCE -include stdbool.h
 
 targets  = fixed_mem_cache.c
 targets += hash_table.c

@@ -37,11 +37,6 @@ struct raft_conn *raft_in_conn_malloc(int sockfd, bool admin, struct in6_addr)
 }
 #endif
 
-static bool conn_outgoing(struct raft_conn *conn)
-{
-	return conn->state < RAFT_CONN_OUTGOING_INCOMING_DIVIDER;
-}
-
 static bool conn_borrowed_log(struct raft_conn *conn)
 {
 	return conn->state & EPOLLLOG;
@@ -90,10 +85,15 @@ void raft_conn_change_to_ready_for_use(struct raft_conn *conn)
 	conn->state = RAFT_CONN_STATE_READY_FOR_USE;
 }
 
+bool raft_conn_outgoing(struct raft_conn *conn)
+{
+	return conn->state < RAFT_CONN_OUTGOING_INCOMING_DIVIDER;
+}
+
 void raft_conn_free(struct raft_conn *conn)
 {
 	debug_printf("raft_conn_free:\n");
-	assert(!conn_outgoing(conn));
+	assert(!raft_conn_outgoing(conn));
 
 	if (conn_borrowed_log(conn))
 		raft_conn_return_log(conn);
@@ -111,7 +111,8 @@ void raft_conn_free(struct raft_conn *conn)
 void raft_conn_clear(struct raft_conn *conn)
 {
 	debug_printf("raft_conn_clear:\n");
-	assert(conn_outgoing(conn) && conn->state != RAFT_CONN_STATE_NOT_CONNECTED);
+	assert(raft_conn_outgoing(conn));
+	assert(conn->state != RAFT_CONN_STATE_NOT_CONNECTED);
 
 	if (conn_borrowed_log(conn))
 		raft_conn_return_log(conn);
@@ -124,15 +125,7 @@ void raft_conn_clear(struct raft_conn *conn)
 	close(conn->sockfd);
 }
 
-void raft_conn_free_or_clear(struct raft_conn *conn)
-{
-	if (conn_outgoing(conn))
-		raft_conn_clear(conn);
-	else
-		raft_conn_free(conn);
-}
-
-static bool conn_check_read(struct raft_conn *conn, ssize_t n)
+static bool conn_check_read(struct raft_conn *conn, bool in, ssize_t n)
 {
 	if (n > 0) {
 		assert(conn->unio >= (size_t)n);
@@ -140,9 +133,12 @@ static bool conn_check_read(struct raft_conn *conn, ssize_t n)
 		return true;
 	}
 
-	if (n == 0 || errno != EWOULDBLOCK)
-		raft_conn_free_or_clear(conn);
-
+	if (n == 0 || errno != EWOULDBLOCK) {
+		if (in)
+			raft_conn_free(conn);
+		else
+			raft_conn_clear(conn);
+	}
 	return false;
 }
 
@@ -151,11 +147,11 @@ static bool conn_check_read(struct raft_conn *conn, ssize_t n)
  * 
  * @return: true on something is read, false on nothing is read
  */
-bool raft_conn_read(struct raft_conn *conn, unsigned char *buffer)
+bool raft_conn_read(struct raft_conn *conn, bool in, unsigned char *buffer)
 {
 	assert(conn->unio > 0);
 	ssize_t n = read(conn->sockfd, buffer, conn->unio);
-	return conn_check_read(conn, n);
+	return conn_check_read(conn, in, n);
 }
 
 /**
@@ -163,9 +159,9 @@ bool raft_conn_read(struct raft_conn *conn, unsigned char *buffer)
  * 
  * @return: true on full read, false on short read
  */
-bool raft_conn_full_read(struct raft_conn *conn, unsigned char *buffer)
+bool raft_conn_full_read(struct raft_conn *conn, bool in, unsigned char *buffer)
 {
-	return raft_conn_read(conn, buffer) && conn->unio == 0;
+	return raft_conn_read(conn, in, buffer) && conn->unio == 0;
 }
 
 /**
@@ -173,13 +169,13 @@ bool raft_conn_full_read(struct raft_conn *conn, unsigned char *buffer)
  * 
  * @return: true on full read, false on short read
  */
-bool raft_conn_full_read_to_buffer(struct raft_conn *conn, uint64_t size)
+bool raft_conn_full_read_to_buffer(struct raft_conn *conn, bool in, uint64_t size)
 {
 	uint64_t readed = size - conn->unio;
-	return raft_conn_full_read(conn, conn->buffer + readed);
+	return raft_conn_full_read(conn, in, conn->buffer + readed);
 }
 
-static bool conn_check_write(struct raft_conn *conn, ssize_t n)
+static bool conn_check_write(struct raft_conn *conn, bool in, ssize_t n)
 {
 	if (n > 0) {
 		assert(conn->unio >= (size_t)n);
@@ -188,9 +184,12 @@ static bool conn_check_write(struct raft_conn *conn, ssize_t n)
 	}
 
 	assert(n == -1);
-	if (errno != EWOULDBLOCK)
-		raft_conn_free_or_clear(conn);
-
+	if (errno != EWOULDBLOCK) {
+		if (in)
+			raft_conn_free(conn);
+		else
+			raft_conn_clear(conn);
+	}
 	return false;
 }
 
@@ -199,11 +198,11 @@ static bool conn_check_write(struct raft_conn *conn, ssize_t n)
  * 
  * @return: true on something is written, false on nothing is written
  */
-static bool conn_write(struct raft_conn *conn, const unsigned char *buffer)
+static bool conn_write(struct raft_conn *conn, bool in, const unsigned char *buffer)
 {
 	assert(conn->unio > 0);
 	ssize_t n = send(conn->sockfd, buffer, conn->unio, MSG_NOSIGNAL);
-	return conn_check_write(conn, n);
+	return conn_check_write(conn, in, n);
 }
 
 /**
@@ -211,9 +210,9 @@ static bool conn_write(struct raft_conn *conn, const unsigned char *buffer)
  * 
  * @return: true on full write, false on short write
  */
-static bool conn_full_write(struct raft_conn *conn, const unsigned char *buffer)
+static bool conn_full_write(struct raft_conn *conn, bool in, const unsigned char *buffer)
 {
-	return conn_write(conn, buffer) && conn->unio == 0;
+	return conn_write(conn, in, buffer) && conn->unio == 0;
 }
 
 /**
@@ -221,10 +220,10 @@ static bool conn_full_write(struct raft_conn *conn, const unsigned char *buffer)
  * 
  * @return: true on full write, false on short write
  */
-bool raft_conn_full_write_buffer(struct raft_conn *conn, uint64_t size)
+bool raft_conn_full_write_buffer(struct raft_conn *conn, bool in, uint64_t size)
 {
 	uint64_t written = size - conn->unio;
-	return conn_full_write(conn, conn->buffer + written);
+	return conn_full_write(conn, in, conn->buffer + written);
 }
 
 /**
@@ -234,7 +233,7 @@ bool raft_conn_full_write_buffer(struct raft_conn *conn, uint64_t size)
  * @return: true on something is written, false on nothing is written
  */
 static bool conn_write_msg(
-		struct raft_conn *conn, struct iovec *iov, size_t iovlen)
+	struct raft_conn *conn, bool in, struct iovec *iov, size_t iovlen)
 {
 	struct msghdr msg = {};
 	msg.msg_iov = iov;
@@ -242,7 +241,7 @@ static bool conn_write_msg(
 
 	assert(conn->unio > 0);
 	ssize_t n = sendmsg(conn->sockfd, &msg, MSG_NOSIGNAL);
-	return conn_check_write(conn, n);
+	return conn_check_write(conn, in, n);
 }
 
 /**
@@ -252,9 +251,9 @@ static bool conn_write_msg(
  * @return: true on full write, false on short write
  */
 bool raft_conn_full_write_msg(
-		struct raft_conn *conn, struct iovec *iov, size_t iovlen)
+	struct raft_conn *conn, bool in, struct iovec *iov, size_t iovlen)
 {
-	return conn_write_msg(conn, iov, iovlen) && conn->unio == 0;
+	return conn_write_msg(conn, in, iov, iovlen) && conn->unio == 0;
 }
 
 /**
@@ -262,7 +261,7 @@ bool raft_conn_full_write_msg(
  * 
  * @return: true on byte 0 is written, false on nothing is written
  */
-bool raft_conn_write_byte_zero(struct raft_conn *conn)
+bool raft_conn_write_byte_zero(struct raft_conn *conn, bool in)
 {
 	static const unsigned char zero[1] = { 0 };
 	ssize_t n = send(conn->sockfd, &zero, 1, MSG_NOSIGNAL);
@@ -270,8 +269,11 @@ bool raft_conn_write_byte_zero(struct raft_conn *conn)
 		return true;
 
 	assert(n == -1);
-	if (errno != EWOULDBLOCK)
-		raft_conn_free_or_clear(conn);
-
+	if (errno != EWOULDBLOCK) {
+		if (in)
+			raft_conn_free(conn);
+		else
+			raft_conn_clear(conn);
+	}
 	return false;
 }

@@ -337,25 +337,11 @@ static void change_to_in_cmd(struct raft_conn *conn)
 	this round, it will be triggered later. */
 }
 
-static void state_out_success(struct raft_conn *conn)
-{
-	debug_printf("RAFT_CONN_STATE_OUT_SUCCESS:\n");
-
-	if (raft_conn_write_byte_zero(conn))
-		change_to_in_cmd(conn);
-}
-
-static void change_to_out_success(struct raft_conn *conn)
-{
-	conn->state = RAFT_CONN_STATE_OUT_SUCCESS;
-	state_out_success(conn);
-}
-
 static void state_vote_out(struct raft_conn *conn)
 {
 	debug_printf("RAFT_CONN_STATE_VOTE_OUT:\n");
 
-	if (raft_conn_full_write_buffer(conn, sizeof(struct request_vote_res)))
+	if (raft_conn_full_write_buffer(conn, true, sizeof(struct request_vote_res)))
 		change_to_in_cmd(conn);
 }
 
@@ -418,7 +404,7 @@ static void state_request_vote_in(struct server *s, struct raft_conn *conn)
 {
 	debug_printf("RAFT_CONN_STATE_REQUEST_VOTE_IN:\n");
 
-	if (!raft_conn_full_read_to_buffer(conn, sizeof(struct request_vote_res)))
+	if (!raft_conn_full_read_to_buffer(conn, false, sizeof(struct request_vote_res)))
 		return;
 
 	struct request_vote_res *res = &conn->request_vote_res;
@@ -460,7 +446,7 @@ static void state_request_vote_out(struct raft_conn *conn)
 {
 	debug_printf("RAFT_CONN_STATE_REQUEST_VOTE_OUT:\n");
 
-	if (raft_conn_full_write_buffer(conn, sizeof(struct request_vote_req)))
+	if (raft_conn_full_write_buffer(conn, false, sizeof(struct request_vote_req)))
 		change_to_request_vote_in(conn);
 }
 
@@ -483,7 +469,7 @@ static void state_recv_entry_out(struct raft_conn *conn)
 {
 	debug_printf("RAFT_CONN_STATE_RECV_ENTRY_OUT:\n");
 
-	if (raft_conn_full_write_buffer(conn, sizeof(struct append_entry_res)))
+	if (raft_conn_full_write_buffer(conn, true, sizeof(struct append_entry_res)))
 		change_to_in_cmd(conn);
 }
 
@@ -520,7 +506,7 @@ static void state_recv_log_in(struct server *s, struct raft_conn *conn)
 	uint64_t machines_size = ntohll(conn->append_log_req.machines_size);
 	uint64_t readed = machines_size - conn->unio;
 	struct log *log = conn->log;
-	if (!raft_conn_full_read(conn, (unsigned char *)log->machines + readed))
+	if (!raft_conn_full_read(conn, true, (unsigned char *)log->machines + readed))
 		return;
 
 	struct append_log_req *req = &conn->append_log_req;
@@ -624,7 +610,7 @@ static void state_authority_out(struct raft_conn *conn)
 {
 	debug_printf("RAFT_CONN_STATE_AUTHORITY_OUT:\n");
 
-	if (raft_conn_full_write_buffer(conn, sizeof(struct authority_approval)))
+	if (raft_conn_full_write_buffer(conn, true, sizeof(struct authority_approval)))
 		change_to_authority_pending(conn);
 }
 
@@ -730,7 +716,7 @@ static void state_append_log_out(struct raft_conn *conn)
 		iov[1].iov_base = conn->log->machines;
 		iov[1].iov_len = machines_size;
 	}
-	if (raft_conn_full_write_msg(conn, iov, iov_len))
+	if (raft_conn_full_write_msg(conn, false, iov, iov_len))
 		change_to_append_log_in(conn);
 }
 
@@ -792,7 +778,7 @@ static void state_heartbeat_out(struct raft_conn *conn)
 {
 	debug_printf("RAFT_CONN_STATE_HEARTBEAT_OUT:\n");
 
-	if (raft_conn_full_write_buffer(conn, sizeof(struct heartbeat_req)))
+	if (raft_conn_full_write_buffer(conn, false, sizeof(struct heartbeat_req)))
 		change_to_heartbeat_in(conn);
 }
 
@@ -821,7 +807,7 @@ static void state_append_entry_in(struct server *s, struct raft_conn *conn)
 {
 	debug_printf("RAFT_CONN_STATE_APPEND_ENTRY_IN:\n");
 
-	if (!raft_conn_full_read_to_buffer(conn, sizeof(struct append_entry_res)))
+	if (!raft_conn_full_read_to_buffer(conn, false, sizeof(struct append_entry_res)))
 		return;
 
 	enum raft_conn_state state = conn->state;
@@ -856,10 +842,25 @@ static void state_append_entry_in(struct server *s, struct raft_conn *conn)
 	}
 }
 
-static void change_to_init_cluster_out(struct raft_conn *conn)
+static void state_change_cluster_out(struct raft_conn *conn)
+{
+	debug_printf("RAFT_CONN_STATE_CHANGE_CLUSTER_OUT:\n");
+
+	if (raft_conn_write_byte_zero(conn, true))
+		change_to_in_cmd(conn);
+}
+
+static void change_to_change_cluster_out(struct raft_conn *conn)
 {
 	raft_conn_return_log(conn);
-	change_to_out_success(conn);
+
+	conn->state = RAFT_CONN_STATE_CHANGE_CLUSTER_OUT;
+	state_change_cluster_out(conn);
+}
+
+static void change_to_init_cluster_out(struct raft_conn *conn)
+{
+	change_to_change_cluster_out(conn);
 }
 
 static void state_init_cluster_in(struct server *s, struct raft_conn *conn)
@@ -869,7 +870,7 @@ static void state_init_cluster_in(struct server *s, struct raft_conn *conn)
 	struct log *log = conn->log;
 	uint64_t machines_size = ntohll(conn->change_cluster_req.machines_size);
 	uint64_t readed = machines_size - conn->unio;
-	if (!raft_conn_full_read(conn, (unsigned char *)log->machines + readed))
+	if (!raft_conn_full_read(conn, true, (unsigned char *)log->machines + readed))
 		return;
 
 	if (s->log->index == 0 && log_complete_init(log)) {
@@ -909,12 +910,6 @@ static void change_to_init_cluster_in(struct server *s, struct raft_conn *conn)
 	raft_conn_free(conn);
 }
 
-static void change_to_change_cluster_out(struct raft_conn *conn)
-{
-	raft_conn_return_log(conn);
-	change_to_out_success(conn);
-}
-
 static void state_change_cluster_in(struct server *s, struct raft_conn *conn)
 {
 	debug_printf("RAFT_CONN_STATE_CHANGE_CLUSTER_IN:\n");
@@ -923,7 +918,7 @@ static void state_change_cluster_in(struct server *s, struct raft_conn *conn)
 	uint64_t machines_size = ntohll(conn->change_cluster_req.machines_size);
 	uint64_t readed = machines_size - conn->unio;
 	unsigned char *machines = (unsigned char *)(log->machines + log->old_n);
-	if (!raft_conn_full_read(conn, machines + readed))
+	if (!raft_conn_full_read(conn, true, machines + readed))
 		return;
 
 	if (s->state == SERVER_STATE_LEADER &&
@@ -964,7 +959,7 @@ static void state_leader_out(struct raft_conn *conn)
 {
 	debug_printf("RAFT_CONN_STATE_LEADER_OUT:\n");
 
-	if (raft_conn_full_write_buffer(conn, sizeof(struct leader_res)))
+	if (raft_conn_full_write_buffer(conn, true, sizeof(struct leader_res)))
 		change_to_in_cmd(conn);
 }
 
@@ -1020,7 +1015,7 @@ static void state_cluster_out(struct raft_conn *conn)
 		iov[1].iov_base = conn->log->machines;
 		iov[1].iov_len = machines_size;
 	}
-	if (raft_conn_full_write_msg(conn, iov, iov_len)) {
+	if (raft_conn_full_write_msg(conn, true, iov, iov_len)) {
 		raft_conn_return_log(conn);
 		change_to_in_cmd(conn);
 	}
@@ -1056,7 +1051,7 @@ static void state_connect_in(struct server *s, struct raft_conn *conn)
 static void state_in_cmd(struct server *s, struct raft_conn *conn)
 {
 	uint64_t readed = RAFT_CONN_BUFFER_SIZE - conn->unio;
-	if (!raft_conn_read(conn, conn->buffer + readed))
+	if (!raft_conn_read(conn, true, conn->buffer + readed))
 		return;
 
 	enum raft_cmd cmd = conn->buffer[0];
@@ -1482,8 +1477,8 @@ static void process(struct server *s, struct raft_conn *conn)
 	case RAFT_CONN_STATE_CLUSTER_OUT:
 		state_cluster_out(conn);
 		break;
-	case RAFT_CONN_STATE_OUT_SUCCESS:
-		state_out_success(conn);
+	case RAFT_CONN_STATE_CHANGE_CLUSTER_OUT:
+		state_change_cluster_out(conn);
 		break;
 	case RAFT_CONN_STATE_AUTHORITY_OUT:
 		if (state_authority_in(s, conn))
@@ -1541,7 +1536,7 @@ static void loop_forever(struct server *s, int sockfd, int admin_sockfd, in_port
 		}
 
 		for (int i = 0; i < n; i++) {
-			static_assert(alignof(struct raft_conn) % 8 == 0);
+			static_assert(__alignof__(struct raft_conn) % 8 == 0);
 
 			switch (events[i].data.u64) {
 			case TIMER_EVENT_U64:
@@ -1571,10 +1566,14 @@ static void loop_forever(struct server *s, int sockfd, int admin_sockfd, in_port
 					conn = events[i].data.ptr;
 				}
 
-				if (events[i].events & ~(EPOLLIN | EPOLLOUT))
-					raft_conn_free_or_clear(conn);
-				else if (events[i].events & conn->state)
+				if (events[i].events & ~(EPOLLIN | EPOLLOUT)) {
+					if (raft_conn_outgoing(conn))
+						raft_conn_clear(conn);
+					else
+						raft_conn_free(conn);
+				} else if (events[i].events & conn->state) {
 					process(s, conn);
+				}
 			}
 		}
 

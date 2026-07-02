@@ -907,7 +907,7 @@ static void grab_epoll_events(struct thread *t)
 	int n = epoll_wait(t->epfd, events, THREAD_MAX_CONN, -1);
 	int timerfd = -1;
 	for (int i = 0; i < n; i++) {
-		static_assert(alignof(struct conn) % 8 == 0);
+		static_assert(__alignof__(struct conn) % 8 == 0);
 
 		if (events[i].data.u64 & 1) {
 			/* main thread distribute sockfd to us */

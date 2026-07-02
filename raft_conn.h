@@ -35,7 +35,7 @@ enum raft_conn_state {
 	RAFT_CONN_STATE_TLS_SERVER_DIVIDER	= (15 << 3) + 0,
 #endif
 	RAFT_CONN_STATE_IN_CMD			= (16 << 3) + EPOLLIN,
-	RAFT_CONN_STATE_OUT_SUCCESS		= (17 << 3) + EPOLLOUT,
+	RAFT_CONN_STATE_CHANGE_CLUSTER_OUT	= (17 << 3) + EPOLLOUT,
 	RAFT_CONN_STATE_VOTE_OUT		= (18 << 3) + EPOLLOUT,
 	RAFT_CONN_STATE_RECV_ENTRY_OUT		= (19 << 3) + EPOLLOUT,
 	RAFT_CONN_STATE_RECV_LOG_IN		= (20 << 3) + EPOLLIN  + EPOLLLOG,
@@ -88,15 +88,15 @@ void raft_conn_borrow_log(struct raft_conn *conn, struct log *log,
 				enum raft_conn_state state, uint64_t size);
 void raft_conn_return_log(struct raft_conn *conn);
 void raft_conn_change_to_ready_for_use(struct raft_conn *conn);
+bool raft_conn_outgoing(struct raft_conn *conn);
 void raft_conn_free(struct raft_conn *conn);
 void raft_conn_clear(struct raft_conn *conn);
-void raft_conn_free_or_clear(struct raft_conn *conn);
-bool raft_conn_read(struct raft_conn *conn, unsigned char *buffer);
-bool raft_conn_full_read(struct raft_conn *conn, unsigned char *buffer);
-bool raft_conn_full_read_to_buffer(struct raft_conn *conn, uint64_t size);
-bool raft_conn_full_write_buffer(struct raft_conn *conn, uint64_t size);
-bool raft_conn_write_byte_zero(struct raft_conn *conn);
+bool raft_conn_read(struct raft_conn *conn, bool in, unsigned char *buffer);
+bool raft_conn_full_read(struct raft_conn *conn, bool in, unsigned char *buffer);
+bool raft_conn_full_read_to_buffer(struct raft_conn *conn, bool in, uint64_t size);
+bool raft_conn_full_write_buffer(struct raft_conn *conn, bool in, uint64_t size);
+bool raft_conn_write_byte_zero(struct raft_conn *conn, bool in);
 bool raft_conn_full_write_msg(
-		struct raft_conn *conn, struct iovec *iov, size_t iovlen);
+	struct raft_conn *conn, bool in, struct iovec *iov, size_t iovlen);
 
 #endif
