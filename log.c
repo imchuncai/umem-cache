@@ -4,7 +4,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include "log.h"
-#include "encoding.h"
 
 struct log *log_malloc(uint64_t machines_size)
 {
@@ -77,7 +76,7 @@ static void __log_complete_unstable(
 
 static void log_machine_reset_version(struct log *log, struct machine *m)
 {
-	m->version = htonll(log->next_machine_version);
+	m->version = htole64(log->next_machine_version);
 	log->next_machine_version++;
 }
 
@@ -132,7 +131,7 @@ bool log_at_least_up_to_date(const struct log *log, uint64_t index, uint64_t ter
 
 static void log_machine_set_id(struct log *log, struct machine *m)
 {
-	m->id =htonl(log->next_machine_id);
+	m->id =htole32(log->next_machine_id);
 	log->next_machine_id++;
 }
 

@@ -68,16 +68,17 @@ Multilingual 多语言
 
 我们提供了内置的集群方案，它基于raft共识算法实现，提供一致性和可用性保证。
 
-- 注意：我们与raft的不同之处请查看 `raft-paper.rst <https://github.com/imchuncai/umem-cache/tree/master/Documentation/raft-paper.rst>`_
-- 注意：所有集群中的机器应该使用相同的THREAD_NR和MEM_LIMIT编译运行
 - 警告：不支持ipv6链路本地地址
 - 警告：不要将使用过的服务端加入到集群中
 - 警告：不支持直接重启节点，应将节点先踢出再重新加入
 - 警告：不支持域名解析
+- 注意：我们与raft的不同之处请查看 `raft-paper.rst <https://github.com/imchuncai/umem-cache/tree/master/Documentation/raft-paper.rst>`_
+- 注意：所有集群中的机器应该使用相同的THREAD_NR和MEM_LIMIT编译运行
 
 客户端协议
 =========
 
+- 除非另有规定，否则该协议为小端字节序
 - 客户端应使用基于ipv6的tcp连接到服务器
 
 CONNECT
@@ -93,21 +94,11 @@ CONNECT
 客户端协议 (编译参数包含RAFT)
 =========================
 
+- 除非另有规定，否则该协议为小端字节序
 - 客户端应使用基于ipv6的tcp连接到服务器
 - 如果协议标签包含(ADMIN)，客户端应使用管理员端口（运行端口号 + 1）
 - command编码请查看 `raft_proto.h <https://github.com/imchuncai/umem-cache/tree/master/raft_proto.h>`_
 - 缓存工作流请查看 `cluster_cache_flow.txt <https://github.com/imchuncai/umem-cache/tree/master/Documentation/translations/zh_CN/cluster_cache_flow.txt>`_
-
-客户端hash
-=========
-
-我们采用客户端hash来分发键。
-
-键在集群中与在单例中有所不同，在集群中它多一个8字节的版本号前缀。
-
-客户端应该使用MurmurHash3_x64_128散列函数，种子设置为74,然后使用前64位散列结果当作小端序整
-数来分发键到指定线程。键的版本号为该线程所在机器的版本号。如果该机器被标记为不可用，这个键应该
-被分发到下一个可用的机器相同的线程上，同时键的版本号保持不变。这些机器应该被视为呈环形排列。
 
 =MACHINE=
 ---------
@@ -116,6 +107,7 @@ CONNECT
 	[sin6-address] [sin6-port] [reserved] [id] [stability] [version]
 	[     16     ] [    2    ] [   2    ] [4 ] [    8    ] [   8   ]
 
+	警告：sin6-port使用网络字节序，也就是大端序
 	注意：[stability]的值越小表示机器越稳定
 	注意：((stability & 1) == 1)表示机器是可用状态
 
@@ -174,6 +166,7 @@ LEADER
 	[command] [sin6-address] [sin6-port] [error] [reserved]
 	[   1   ] [     16     ] [    2    ] [  1  ] [   1    ]
 
+	警告：sin6-port使用网络字节序，也就是大端序
 	注意：[error]0表示成功, 1表示没有领导者信息
 
 CLUSTER
@@ -184,7 +177,7 @@ CLUSTER
 	[command] [type] [reserved] [machines-size] [version] [  machines   ]
 	[   1   ] [ 1  ] [   7    ] [      8      ] [   8   ] [=MACHINE= * n]
 
-注意：集群类型请查看 `log.h <https://github.com/imchuncai/umem-cache/tree/master/log.h>`_
+	注意：集群类型请查看 `log.h <https://github.com/imchuncai/umem-cache/tree/master/log.h>`_
 
 CONNECT
 -------
@@ -213,13 +206,12 @@ AUTHORITY
 	[command] [=APPROVAL=] [reserved] [=APPROVAL=]
 	[   1   ]              [   1    ]
 
-	警告：客户端设置TCP_NODELAY可能会损害服务端性能
-
 缓存协议
 =======
 
 连接到目标线程后，使用以下协议与线程进行交互。
 
+- 除非另有规定，否则该协议为小端字节序
 - command编码请查看 `conn.h <https://github.com/imchuncai/umem-cache/tree/master/conn.h>`_
 
 =CMD=
@@ -248,3 +240,22 @@ CMD-DEL
 	        [  1  ]
 
 	注意：[error]总是0
+
+键分发
+=====
+
+我们采用客户端hash来分发键。
+
+客户端应该使用MurmurHash3_x64_128散列函数，种子设置为74,然后使用前64位散列结果当作小端序整
+数来分发键到指定线程，分发使用的算法为 `Lemire's reduction method <https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction>`_ .
+
+集群成员分发
+----------
+
+键在集群中与在单例中有所不同，在集群中它多一个8字节的版本号前缀，这个版本号为小端序编码。这个版
+本号不要传给散列函数。
+
+客户端应该使用MurmurHash3_x64_128散列函数，种子设置为74,然后使用后64位散列结果当作小端序整
+数来分发键到指定成员，分发使用的算法为位取模散列。键的版本号为该成员的版本号。如果该成员被标记
+为不可用，这个键应该被分发到下一个可用的成员上，同时键的版本号保持不变。所有成员应该被视为呈环
+形排列。

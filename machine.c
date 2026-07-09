@@ -5,16 +5,15 @@
 #include <stdlib.h>
 #include <assert.h>
 #include "machine.h"
-#include "encoding.h"
 
 uint32_t machine_id(const struct machine *m)
 {
-	return ntohl(m->id);
+	return le32toh(m->id);
 }
 
 uint64_t machine_stability(const struct machine *m)
 {
-	return ntohll(m->stability);
+	return le64toh(m->stability);
 }
 
 static bool is_power_of_2(uint32_t i)
@@ -42,7 +41,7 @@ void machine_set_stability(struct machine *m, bool available)
 {
 	uint64_t stability = machine_stability(m);
 	if (stability_to_available(stability) != available)
-		m->stability = htonll(stability + 1);
+		m->stability = htole64(stability + 1);
 }
 
 void machine_copy(struct machine *dest, const struct machine *src)

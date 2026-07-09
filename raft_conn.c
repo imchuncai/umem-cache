@@ -9,27 +9,27 @@
 #include "debug.h"
 
 #ifdef CONFIG_KERNEL_TLS
-struct raft_conn *raft_in_conn_malloc(int sockfd, bool admin, struct in6_addr peer)
+struct raft_conn *raft_in_conn_malloc(int fd, bool admin, struct in6_addr peer)
 {
 	struct raft_conn *conn = malloc(sizeof(struct raft_conn));
 	if (conn) {
-		if (!tls_init_server(&conn->session, sockfd, peer)) {
+		if (!tls_init_server(&conn->session, fd, peer)) {
 			free(conn);
 			return NULL;
 		}
 
-		conn->sockfd = sockfd;
+		conn->fd = fd;
 		conn->admin = admin;
 		conn->state = RAFT_CONN_STATE_TLS_SERVER_HANDSHAKE_IN;
 	}
 	return conn;
 }
 #else
-struct raft_conn *raft_in_conn_malloc(int sockfd, bool admin, struct in6_addr)
+struct raft_conn *raft_in_conn_malloc(int fd, bool admin, struct in6_addr)
 {
 	struct raft_conn *conn = malloc(sizeof(struct raft_conn));
 	if (conn) {
-		conn->sockfd = sockfd;
+		conn->fd = fd;
 		conn->admin = admin;
 		raft_conn_set_io(conn, RAFT_CONN_STATE_IN_CMD, RAFT_CONN_BUFFER_SIZE);
 	}
@@ -98,13 +98,13 @@ void raft_conn_free(struct raft_conn *conn)
 	if (conn_borrowed_log(conn))
 		raft_conn_return_log(conn);
 	else if (conn->state > RAFT_CONN_STATE_AUTHORITY_DIVIDER)
-		list_del(&conn->authority_node);
+		list_del(&conn->authority);
 #ifdef CONFIG_KERNEL_TLS
 	else if (conn->state < RAFT_CONN_STATE_TLS_SERVER_DIVIDER)
 		tls_deinit(&conn->session);
 #endif
 
-	close(conn->sockfd);
+	close(conn->fd);
 	free(conn);
 }
 
@@ -122,7 +122,7 @@ void raft_conn_clear(struct raft_conn *conn)
 #endif
 
 	conn->state = RAFT_CONN_STATE_NOT_CONNECTED;
-	close(conn->sockfd);
+	close(conn->fd);
 }
 
 static bool conn_check_read(struct raft_conn *conn, bool in, ssize_t n)
@@ -150,7 +150,7 @@ static bool conn_check_read(struct raft_conn *conn, bool in, ssize_t n)
 bool raft_conn_read(struct raft_conn *conn, bool in, unsigned char *buffer)
 {
 	assert(conn->unio > 0);
-	ssize_t n = read(conn->sockfd, buffer, conn->unio);
+	ssize_t n = read(conn->fd, buffer, conn->unio);
 	return conn_check_read(conn, in, n);
 }
 
@@ -201,7 +201,7 @@ static bool conn_check_write(struct raft_conn *conn, bool in, ssize_t n)
 static bool conn_write(struct raft_conn *conn, bool in, const unsigned char *buffer)
 {
 	assert(conn->unio > 0);
-	ssize_t n = send(conn->sockfd, buffer, conn->unio, MSG_NOSIGNAL);
+	ssize_t n = send(conn->fd, buffer, conn->unio, MSG_NOSIGNAL);
 	return conn_check_write(conn, in, n);
 }
 
@@ -240,7 +240,7 @@ static bool conn_write_msg(
 	msg.msg_iovlen = iovlen;
 
 	assert(conn->unio > 0);
-	ssize_t n = sendmsg(conn->sockfd, &msg, MSG_NOSIGNAL);
+	ssize_t n = sendmsg(conn->fd, &msg, MSG_NOSIGNAL);
 	return conn_check_write(conn, in, n);
 }
 
@@ -264,7 +264,7 @@ bool raft_conn_full_write_msg(
 bool raft_conn_write_byte_zero(struct raft_conn *conn, bool in)
 {
 	static const unsigned char zero[1] = { 0 };
-	ssize_t n = send(conn->sockfd, &zero, 1, MSG_NOSIGNAL);
+	ssize_t n = send(conn->fd, &zero, 1, MSG_NOSIGNAL);
 	if (n > 0)
 		return true;
 

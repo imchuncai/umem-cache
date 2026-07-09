@@ -6,9 +6,11 @@
 
 #include "raft_conn.h"
 
-#define MEMBER_TYPE_OLD	(1 << 0)
-#define MEMBER_TYPE_NEW	(1 << 1)
-#define MEMBER_TYPE_ALL	(MEMBER_TYPE_OLD + MEMBER_TYPE_NEW)
+#define MEMBER_TYPE_OLD		(1 << 0)
+#define MEMBER_TYPE_NEW		(1 << 1)
+#define MEMBER_TYPE_ALL		(MEMBER_TYPE_OLD + MEMBER_TYPE_NEW)
+#define MEMBER_IN_OLD(type)	((type) & MEMBER_TYPE_OLD)
+#define MEMBER_IN_NEW(type)	((type) >> 1)
 
 struct member {
 	uint32_t id;

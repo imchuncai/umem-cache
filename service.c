@@ -5,13 +5,12 @@
 #include <errno.h>
 #include "service.h"
 #include "thread.h"
-#include "encoding.h"
 #include "socket.h"
 #include "epoll.h"
 #include "tls.h"
 
 struct service_conn {
-	int sockfd;
+	int fd;
 	unsigned char buffer[4];
 
 #ifdef CONFIG_KERNEL_TLS
@@ -20,15 +19,15 @@ struct service_conn {
 };
 
 static struct service_conn *service_conn_malloc(
-		int sockfd, struct in6_addr peer __attribute__((unused)))
+		int fd, struct in6_addr peer __attribute__((unused)))
 {
 	struct service_conn *conn = malloc(sizeof(struct service_conn));
 	if (conn) {
-		conn->sockfd = sockfd;
+		conn->fd = fd;
 		conn->buffer[3] = 8;
 
 	#ifdef CONFIG_KERNEL_TLS
-		if (!tls_init_server(&conn->session, sockfd, peer)) {
+		if (!tls_init_server(&conn->session, fd, peer)) {
 			free(conn);
 			return NULL;
 		}
@@ -39,7 +38,7 @@ static struct service_conn *service_conn_malloc(
 
 static void service_conn_free(struct service_conn *conn)
 {
-	close(conn->sockfd);
+	close(conn->fd);
 #ifdef CONFIG_KERNEL_TLS
 	if (conn->session.session)
 		tls_deinit(&conn->session);
@@ -49,11 +48,11 @@ static void service_conn_free(struct service_conn *conn)
 
 static bool service_conn_full_read_connect_in(struct service_conn *conn)
 {
-	int sockfd = conn->sockfd;
+	int fd = conn->fd;
 	unsigned char unread = conn->buffer[3];
 	assert(unread > 0);
-	ssize_t n = read(conn->sockfd, conn->buffer - 4 + (8 - unread), unread);
-	conn->sockfd = sockfd;
+	ssize_t n = read(conn->fd, conn->buffer - 4 + (8 - unread), unread);
+	conn->fd = fd;
 	if (n > 0) {
 		assert(unread >= n);
 		if (unread == n) {
@@ -107,14 +106,14 @@ static void read_thread_info(struct service_conn *conn, int epfd)
 	if (!service_conn_full_read_connect_in(conn))
 		return;
 
-	uint32_t thread_id = ntohl(*(uint32_t *)conn->buffer);
+	uint32_t thread_id = le32toh(*(uint32_t *)conn->buffer);
 	if (thread_id >= CONFIG_THREAD_NR) {
 		service_conn_free(conn);
 		return;
 	}
 
-	epoll_del(epfd, conn->sockfd);
-	thread_dispatch(thread_id, conn->sockfd);
+	epoll_del(epfd, conn->fd);
+	thread_dispatch(thread_id, conn->fd);
 #ifdef CONFIG_KERNEL_TLS
 	assert(conn->session.session == NULL);
 #endif
@@ -150,16 +149,16 @@ void must_service_run(int port)
 	int epfd = epoll_create1(0);
 	must(epfd != -1);
 
-	int sockfd = listen_port(port, epfd, 0);
-	must(sockfd != -1);
+	int fd = listen_port(port, epfd, 0);
+	must(fd != -1);
 
 	must(threads_run());
 
 	while (true) {
 		int n;
-		if (sockfd == -1) {
+		if (fd == -1) {
 			sleep(3);
-			sockfd = listen_port(port, epfd, 0);
+			fd = listen_port(port, epfd, 0);
 			/* in case listen failed, don't wait epoll */
 			n = epoll_wait(epfd, events, MAX_EPOLL_EVENTS, 0);
 		} else {
@@ -173,9 +172,9 @@ void must_service_run(int port)
 					service_conn_free(conn);
 				else
 					read_thread_info(conn, epfd);
-			} else if (!accept_new_conn(sockfd, epfd)) {
-				close(sockfd);
-				sockfd = -1;
+			} else if (!accept_new_conn(fd, epfd)) {
+				close(fd);
+				fd = -1;
 			}
 		}
 	}

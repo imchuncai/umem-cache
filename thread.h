@@ -27,6 +27,8 @@ static_assert(THREAD_MAX_CONN <= INT32_MAX);
  * @m_lru_head: for S3-FIFO algorithm and enabled kv only
  * @hash_table: hash table used to index kv or conn
  * @kv_cache_list: the list of kv_cache manages memory for kv and concat_val
+ * 
+ * WARN: @events should be the last member, it is required by MAX_EVENTS
  */
 struct thread {
 	int epfd;
@@ -39,7 +41,8 @@ struct thread {
 	struct list_head s_lru_head;
 	struct list_head m_lru_head;
 	struct hash_table hash_table;
-	struct hlist_head clock_list;
+	struct hlist_head clock_probation;
+	struct hlist_head clock_death;
 	struct kv_cache kv_cache_list[KV_CACHE_LEN];
 
 	struct fixed_mem_cache conn_cache;
@@ -49,7 +52,7 @@ struct thread {
 } __attribute__((aligned(CACHE_LINE_SIZE)));
 
 bool threads_run();
-void thread_dispatch(uint32_t id, int sockfd);
+void thread_dispatch(uint32_t id, int fd);
 
 #ifdef CONFIG_RAFT
 bool threads_warmed_up();

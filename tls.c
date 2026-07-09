@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #include <assert.h>
 #include <arpa/inet.h>
@@ -12,7 +12,7 @@ static gnutls_certificate_credentials_t x509_cred;
 			    GNUTLS_CLIENT | GNUTLS_NONBLOCK | GNUTLS_NO_SIGNAL)
 #define GNUTLS_SERVER_FLAG (GNUTLS_SERVER | GNUTLS_NONBLOCK | GNUTLS_NO_SIGNAL)
 
-static bool tls_session_init(struct tls_session *s, int sockfd,
+static bool tls_session_init(struct tls_session *s, int fd,
 				struct in6_addr peer, unsigned int flag)
 {
 	if (gnutls_init(&s->session, flag))
@@ -30,19 +30,20 @@ static bool tls_session_init(struct tls_session *s, int sockfd,
 	assert(ret);
 
 	gnutls_session_set_verify_cert(s->session, s->peer_addr, 0);
-	gnutls_transport_set_int(s->session, sockfd);
+	gnutls_transport_set_int(s->session, fd);
+	gnutls_transport_set_pull_timeout_function(s->session, gnutls_system_recv_timeout);
 	gnutls_handshake_set_timeout(s->session, GNUTLS_DEFAULT_HANDSHAKE_TIMEOUT);
 	return true;
 }
 
-bool tls_init_client(struct tls_session *client, int sockfd, struct in6_addr peer)
+bool tls_init_client(struct tls_session *client, int fd, struct in6_addr peer)
 {
-	return tls_session_init(client, sockfd, peer, GNUTLS_CLIENT_FLAG);
+	return tls_session_init(client, fd, peer, GNUTLS_CLIENT_FLAG);
 }
 
-bool tls_init_server(struct tls_session *server, int sockfd, struct in6_addr peer)
+bool tls_init_server(struct tls_session *server, int fd, struct in6_addr peer)
 {
-	if (!tls_session_init(server, sockfd, peer, GNUTLS_SERVER_FLAG))
+	if (!tls_session_init(server, fd, peer, GNUTLS_SERVER_FLAG))
 		return false;
 
 	gnutls_certificate_server_set_request(server->session, GNUTLS_CERT_REQUEST);

@@ -9,7 +9,7 @@
 #include <netinet/in.h>
 
 /**
- * machine - Network byte order machine
+ * machine - Little-endian byte order machine except @sin6_port is big-endian
  */
 struct machine {
 	struct in6_addr sin6_addr;

@@ -73,16 +73,17 @@ CLUSTER SOLUTION
 We have built-in cluster solution, which is implement under the guidance of the
 raft consensus algorithm, ensures consistency and availability.
 
+- WARN: ipv6 link-local address is not supported.
+- WARN: do not add servers that are already in use to the cluster.
+- WARN: do not restart nodes, instead, remove it from the cluster and then add it back.
+- WARN: domain name resolution is not supported.
 - NOTE: check our changes to raft at `raft-paper.rst <https://github.com/imchuncai/umem-cache/tree/master/Documentation/raft-paper.rst>`_ .
 - NOTE: every machine in the cluster should be built using the same THREAD_NR and MEM_LIMIT.
-- WARNING: ipv6 link-local address is not supported.
-- WARNING: do not add servers that are already in use to the cluster.
-- WARNING: do not restart nodes, instead, remove it from the cluster and then add it back.
-- WARNING: domain name resolution is not supported.
 
 CLIENT PROTOCOL
 ===============
 
+- Unless otherwise specified, this protocol is little-endian.
 - Client should connect to the server using tcp over ipv6.
 
 CONNECT
@@ -98,25 +99,11 @@ CONNECT
 CLIENT PROTOCOL (BUILD WITH RAFT)
 =================================
 
+- Unless otherwise specified, this protocol is little-endian
 - Client should connect to the server using tcp over ipv6
 - Client should use admin port(running_port + 1), if the proto is tagged (ADMIN)
 - Check `raft_proto.h <https://github.com/imchuncai/umem-cache/tree/master/raft_proto.h>`_ for command code
 - Check `cluster_cache_flow.txt <https://github.com/imchuncai/umem-cache/tree/master/Documentation/cluster_cache_flow.txt>`_ for cache flow
-
-CLIENT HASH
------------
-
-We use client side hash to dispatch keys.
-
-Keys in the cluster differ from those in the singleton, they have an 8-byte
-prefix version.
-
-Client should use MurmurHash3_x64_128 with seed 74 as hash method, and use
-the first 64 bits of the hash value as a little-endian integer to dispatch keys
-to threads. The key's version is the version of the machine the thread belongs
-to. If the machine of the thread is unavailable, the key should be dispatched to
-the same thread of the next available machine, but the version of the key should
-remain unchanged. And the machines should be considered as arranged in a ring.
 
 =MACHINE=
 ---------
@@ -125,6 +112,7 @@ remain unchanged. And the machines should be considered as arranged in a ring.
 	[sin6-address] [sin6-port] [reserved] [id] [stability] [version]
 	[     16     ] [    2    ] [   2    ] [4 ] [    8    ] [   8   ]
 
+	WARN: sin6-port uses network byte order which is big-endian
 	NOTE: machine with lower [stability] is more stable
 	NOTE: machine is available if ((stability & 1) == 1)
 
@@ -183,6 +171,7 @@ LEADER
 	[command] [sin6-address] [sin6-port] [error] [reserved]
 	[   1   ] [     16     ] [    2    ] [  1  ] [   1    ]
 
+	WARN: sin6-port uses network byte order which is big-endian
 	NOTE: [error] 0 for success, 1 for lost leader
 
 CLUSTER
@@ -193,7 +182,7 @@ CLUSTER
 	[command] [type] [reserved] [machines-size] [version] [  machines   ]
 	[   1   ] [ 1  ] [   7    ] [      8      ] [   8   ] [=MACHINE= * n]
 
-NOTE: check `log.h <https://github.com/imchuncai/umem-cache/tree/master/log.h>`_ for type
+	NOTE: check `log.h <https://github.com/imchuncai/umem-cache/tree/master/log.h>`_ for type
 
 CONNECT
 -------
@@ -227,6 +216,7 @@ CACHE PROTOCOL
 
 Use the following protocol to interact with the thread after connecting to the target thread.
 
+- Unless otherwise specified, this protocol is little-endian
 - check `conn.h <https://github.com/imchuncai/umem-cache/tree/master/conn.h>`_ for command code
 
 =CMD=
@@ -255,3 +245,26 @@ CMD-DEL
 	        [  1  ]
 
 	Note: [error] is always 0
+
+KEY DISPATCH
+============
+
+We use client side hash to dispatch keys to threads.
+
+Client should use MurmurHash3_x64_128 with seed 74 as hash method, and use the
+first 64 bits of the hash value as a little-endian integer to dispatch keys to
+threads. The dispatch method is `Lemire's reduction method <https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction>`_ .
+
+CLUSTER MEMBER DISPATCH
+-----------------------
+
+Keys in the cluster differ from those in the singleton, they have an 8-byte
+prefix version, and use little-endian byte order. This prefix version should
+not pass to the hash method.
+
+Client should use MurmurHash3_x64_128 with seed 74 as hash method, and use
+the second 64 bits of the hash value as a little-endian integer to dispatch keys
+to the members. The dispatch method is bitwise modulo. The key's version is the
+version of the member. If the member is unavailable, the key should be
+dispatched to the the next available member, and the version of the key should
+remain unchanged. And the members should be considered as arranged in a ring.

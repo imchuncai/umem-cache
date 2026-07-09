@@ -9,6 +9,10 @@
 /**
  * cluster -
  * @members: members are sorted by id
+ * 
+ * Note: @require_old_votes and @require_new_votes are different from the
+ * majority of the cluster, because the leader does not have to request a vote
+ * from itself, and there is a chance that the leader is not in the cluster.
  */
 struct cluster {
 	struct cluster *next_stale;

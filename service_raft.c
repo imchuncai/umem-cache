@@ -8,7 +8,6 @@
 #include <string.h>
 #include "service.h"
 #include "thread.h"
-#include "encoding.h"
 #include "epoll.h"
 #include "tls.h"
 #include "cluster.h"
@@ -25,28 +24,27 @@ enum server_state {
 	SERVER_STATE_FOLLOWER,
 } __attribute__((__packed__));
 
-#define SERVER_MAX_EPOLL_EVENTS	512
+#define MAX_EPOLL_EVENTS 512
 
 /**
  * server -
  * @timer_ticks: +1 when received timer event
- * 
- * Note: the word entry means a heartbeat or a log
  */
 struct server {
 	int epfd;
 	uint32_t id;
-	uint64_t current_term;
+	uint64_t term;
 	int timerfd;
 	unsigned char timer_ticks;
 	enum server_state state;
 	union {
 		struct {
+			uint64_t replicate_entry_round;
 			int32_t commit_entry_required_old_votes;
 			int32_t commit_entry_required_new_votes;
-			uint64_t replicate_entry_round;
-			bool replicate_entry;
 			bool entry_commited;
+
+			bool replicate_entry;
 
 			bool available;
 		} leader;
@@ -60,10 +58,10 @@ struct server {
 		} follower;
 	};
 	struct log *log;
-	struct list_head authority_list;
+	struct list_head authority;
 	struct cluster *stale_cluster;
 	struct cluster *cluster;
-	struct epoll_event events[SERVER_MAX_EPOLL_EVENTS];
+	struct epoll_event events[MAX_EPOLL_EVENTS];
 };
 
 static void server_borrow_log(struct server *s, struct log *log)
@@ -102,7 +100,7 @@ static bool _accept(struct server *s, int sockfd, bool admin)
 		struct raft_conn *conn = raft_in_conn_malloc(fd, admin, peer);
 		if (conn == NULL)
 			close(fd);
-		else if (!epoll_add(s->epfd, conn->sockfd, (uint64_t)conn))
+		else if (!epoll_add(s->epfd, conn->fd, (uint64_t)conn))
 			raft_conn_free(conn);
 	}
 }
@@ -115,11 +113,8 @@ static bool leader_log_commited(struct server *s)
 	for (uint32_t i = 0; i < cl->members_n; i++) {
 		struct member *m = cl->members + i;
 		if (m->match_index >= s->log->index) {
-			if (m->type & MEMBER_TYPE_OLD)
-				old_commited++;
-
-			if (m->type & MEMBER_TYPE_NEW)
-				new_commited++;
+			old_commited += MEMBER_IN_OLD(m->type);
+			new_commited += MEMBER_IN_NEW(m->type);
 		}
 	}
 	/* Note: we ignored leader warm up status for easy program */
@@ -164,8 +159,7 @@ static void reset_timer_hard(struct server *s)
 	 * Note: we don't have to persist log to stable storage, so we
 	 * definitely have some room to reduce the election_timeout.
 	 */
-	int election_timeout = rand() % (150 * 1000000) + (300 - 150) * 1000000;
-	int broadcast_time = election_timeout / 10;
+	int broadcast_time = rand() % (15 * 1000000) + (30 - 15) * 1000000;
 
 	struct itimerspec spec;
 	spec.it_value.tv_sec = 0;
@@ -193,10 +187,9 @@ static void server_replace_cluster(struct server *s, struct cluster *cl)
 {
 	debug_printf("cluster replaced:\n");
 
-	if (s->cluster) {
-		s->cluster->next_stale = s->stale_cluster;
-		s->stale_cluster = s->cluster;
-	}
+	assert(s->cluster);
+	s->cluster->next_stale = s->stale_cluster;
+	s->stale_cluster = s->cluster;
 	s->cluster = cl;
 }
 
@@ -213,11 +206,10 @@ static void convert_to_follower(struct server *s)
 	assert(s->state != SERVER_STATE_FOLLOWER);
 	debug_printf("convert to follower:\n");
 
-	server_replace_cluster(s, NULL);
-
 	s->state = SERVER_STATE_FOLLOWER;
 	reset_follower(s);
 	reset_timer(s);
+	server_replace_cluster(s, NULL);
 }
 
 /**
@@ -231,8 +223,8 @@ static void convert_to_follower(struct server *s)
  */
 static void server_increase_term(struct server *s, uint64_t term)
 {
-	assert(term > s->current_term);
-	s->current_term = term;
+	assert(term > s->term);
+	s->term = term;
 
 	if (s->state == SERVER_STATE_FOLLOWER)
 		reset_follower(s);
@@ -245,8 +237,9 @@ static void must_server_init(struct server *s)
 	s->epfd = epoll_create1(0);
 	must(s->epfd != -1);
 
-	s->current_term = 0;
+	s->term = 0;
 
+	// Note: the timer will be set after a log is received
 	s->timerfd = timerfd_create(CLOCK_BOOTTIME, 0);
 	must(s->timerfd != -1);
 	must(epoll_add_in(s->epfd, s->timerfd, TIMER_EVENT_U64));
@@ -259,7 +252,7 @@ static void must_server_init(struct server *s)
 	memset(log, 0, sizeof(struct log));
 	server_borrow_log(s, log);
 
-	list_head_init(&s->authority_list);
+	list_head_init(&s->authority);
 	s->stale_cluster = NULL;
 	s->cluster = NULL;
 }
@@ -267,7 +260,7 @@ static void must_server_init(struct server *s)
 static bool leader_change_available(struct server *s)
 {
 	struct log *log;
-	log = log_malloc_change_available(s->cluster, s->log, s->current_term);
+	log = log_malloc_change_available(s->cluster, s->log, s->term);
 	if (log) {
 		server_replace_log(s, log);
 		// Note: cluster is not changed.
@@ -284,8 +277,8 @@ static bool leader_replace_log(struct server *s, struct log *new)
 	if (cl) {
 		server_replace_log(s, new);
 		server_replace_cluster(s, cl);
-		s->leader.replicate_entry = true;
 		s->leader.entry_commited = true;
+		s->leader.replicate_entry = true;
 	}
 	return cl;
 }
@@ -310,14 +303,14 @@ static void convert_to_leader(struct server *s)
 	const struct machine *leader;
 	if (log->type & LOG_TYPE_UNSTABLE_MASK) {
 		log->index++;
-		log->term = s->current_term;
+		log->term = s->term;
 		leader = log_machines_find_new(log, s->id);
 	} else {
 		leader = log_machines_find_old(log, s->id);
 	}
 	s->leader.replicate_entry_round = 0;
-	s->leader.replicate_entry = true;
 	s->leader.entry_commited = true;
+	s->leader.replicate_entry = true;
 	if (leader)
 		s->leader.available = machine_available(leader);
 	else
@@ -347,11 +340,11 @@ static void state_vote_out(struct raft_conn *conn)
 
 static void change_to_vote_out(struct server *s, struct raft_conn *conn, bool grant)
 {
-	debug_printf("term: %ld voted for: %d\n", s->current_term,
-					grant ? s->follower.voted_for : 0);
+	debug_printf("term: %ld voted for: %d\n",
+			s->term, grant ? s->follower.voted_for : 0);
 
 	struct request_vote_res *res = &conn->request_vote_res;
-	res->term = htonll(s->current_term);
+	res->term = htole64(s->term);
 	res->granted = grant;
 
 	raft_conn_set_io(conn, RAFT_CONN_STATE_VOTE_OUT, sizeof(*res));
@@ -367,18 +360,18 @@ static void state_vote_in(struct server *s, struct raft_conn *conn)
 	 * rent leader, it does not update its term or grant its vote.
 	 */
 	if (s->state == SERVER_STATE_LEADER ||
-		(s->state == SERVER_STATE_FOLLOWER && s->follower.leader != 0)) {
+	   (s->state == SERVER_STATE_FOLLOWER && s->follower.leader != 0)) {
 		change_to_vote_out(s, conn, false);
 		return;
 	}
 
 	struct request_vote_req *req = &conn->request_vote_req;
-	uint32_t candidate_id = ntohl(req->candidate_id);
-	uint64_t term = ntohll(req->term);
-	uint64_t log_index = ntohll(req->log_index);
-	uint64_t log_term = ntohll(req->log_term);
+	uint32_t candidate_id = le32toh(req->candidate_id);
+	uint64_t term = le64toh(req->term);
+	uint64_t log_index = le64toh(req->log_index);
+	uint64_t log_term = le64toh(req->log_term);
 
-	if (term > s->current_term)
+	if (term > s->term)
 		server_increase_term(s, term);
 
 	/**
@@ -387,7 +380,7 @@ static void state_vote_in(struct server *s, struct raft_conn *conn)
 	 * 2. If votedFor is null or candidateId, and candidate’s log is at
 	 * least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
 	 */
-	if (s->state == SERVER_STATE_FOLLOWER && term >= s->current_term &&
+	if (s->state == SERVER_STATE_FOLLOWER && term >= s->term &&
 		(s->follower.voted_for == 0 ||
 		 s->follower.voted_for == candidate_id) &&
 		log_at_least_up_to_date(s->log, log_index, log_term)) {
@@ -408,23 +401,20 @@ static void state_request_vote_in(struct server *s, struct raft_conn *conn)
 		return;
 
 	struct request_vote_res *res = &conn->request_vote_res;
-	uint64_t term = ntohll(res->term);
+	uint64_t term = le64toh(res->term);
 	bool vote_granted = res->granted;
 
 	raft_conn_change_to_ready_for_use(conn);
 
-	if (term > s->current_term) {
+	if (term > s->term) {
 		server_increase_term(s, term);
 		return;
 	}
 
-	if (s->state == SERVER_STATE_CANDIDATE && s->current_term == term && vote_granted) {
+	if (s->state == SERVER_STATE_CANDIDATE && s->term == term && vote_granted) {
 		struct member *m = container_of(conn, struct member, conn);
-		if ((m->type & MEMBER_TYPE_OLD))
-			s->candidate.required_old_votes--;
-
-		if ((m->type & MEMBER_TYPE_NEW))
-			s->candidate.required_new_votes--;
+		s->candidate.required_old_votes -= MEMBER_IN_OLD(m->type);
+		s->candidate.required_new_votes -= MEMBER_IN_NEW(m->type);
 
 		debug_printf("vote granted, still require: %d, %d\n",
 				s->candidate.required_old_votes,
@@ -456,10 +446,10 @@ static void change_to_request_vote_out(struct server *s, struct raft_conn *conn)
 
 	struct request_vote_req *req = &conn->request_vote_req;
 	req->cmd = RAFT_CMD_REQUEST_VOTE;
-	req->candidate_id = htonl(s->id);
-	req->term = htonll(s->current_term);
-	req->log_index = htonll(s->log->index);
-	req->log_term = htonll(s->log->term);
+	req->candidate_id = htole32(s->id);
+	req->term = htole64(s->term);
+	req->log_index = htole64(s->log->index);
+	req->log_term = htole64(s->log->term);
 
 	raft_conn_set_io(conn, RAFT_CONN_STATE_REQUEST_VOTE_OUT, sizeof(*req));
 	state_request_vote_out(conn);
@@ -481,7 +471,7 @@ static bool server_warmed_up(struct server *s)
 static void change_to_recv_entry_out(struct server *s, struct raft_conn *conn)
 {
 	struct append_entry_res *res = &conn->append_entry_res;
-	res->term = htonll(s->current_term);
+	res->term = htole64(s->term);
 	res->applied = server_warmed_up(s);
 
 	raft_conn_set_io(conn, RAFT_CONN_STATE_RECV_ENTRY_OUT, sizeof(*res));
@@ -503,7 +493,7 @@ static void state_recv_log_in(struct server *s, struct raft_conn *conn)
 {
 	debug_printf("RAFT_CONN_STATE_RECV_LOG_IN:\n");
 
-	uint64_t machines_size = ntohll(conn->append_log_req.machines_size);
+	uint64_t machines_size = le64toh(conn->append_log_req.machines_size);
 	uint64_t readed = machines_size - conn->unio;
 	struct log *log = conn->log;
 	if (!raft_conn_full_read(conn, true, (unsigned char *)log->machines + readed))
@@ -511,16 +501,16 @@ static void state_recv_log_in(struct server *s, struct raft_conn *conn)
 
 	struct append_log_req *req = &conn->append_log_req;
 	enum log_type type = req->type;
-	uint64_t term = ntohll(req->term);
-	uint32_t leader = ntohl(req->leader_id);
-	uint32_t follower = ntohl(req->follower_id);
-	uint64_t log_index = ntohll(req->log_index);
-	uint64_t log_term = ntohll(req->log_term);
-	uint64_t version = ntohll(req->version);
-	uint64_t next_machine_version = ntohll(req->next_machine_version);
-	uint32_t next_machine_id = ntohl(req->next_machine_id);
-	uint32_t new_machine_nr = ntohl(req->new_machine_nr);
-	uint64_t distinct_machines_n = ntohll(req->distinct_machines_n);
+	uint64_t term = le64toh(req->term);
+	uint32_t leader = le32toh(req->leader_id);
+	uint32_t follower = le32toh(req->follower_id);
+	uint64_t log_index = le64toh(req->log_index);
+	uint64_t log_term = le64toh(req->log_term);
+	uint64_t version = le64toh(req->version);
+	uint64_t next_machine_version = le64toh(req->next_machine_version);
+	uint32_t next_machine_id = le32toh(req->next_machine_id);
+	uint32_t new_machine_nr = le32toh(req->new_machine_nr);
+	uint64_t distinct_machines_n = le64toh(req->distinct_machines_n);
 
 	/**
 	 * RAFT: Figure 2: AppendEntries RPC
@@ -528,7 +518,7 @@ static void state_recv_log_in(struct server *s, struct raft_conn *conn)
 	 * 2. Reply false if log doesn’t contain an entry at prevLogIndex
 	 *    whose term matches prevLogTerm (§5.3)
 	 */
-	if (term < s->current_term) {
+	if (term < s->term) {
 		change_to_recv_log_out(s, conn);
 		return;
 	}
@@ -536,7 +526,7 @@ static void state_recv_log_in(struct server *s, struct raft_conn *conn)
 	if (s->log->index == 0)
 		set_timer(s, follower);
 
-	if (term > s->current_term)
+	if (term > s->term)
 		server_increase_term(s, term);
 	else if (s->state != SERVER_STATE_FOLLOWER)
 		convert_to_follower(s);
@@ -563,7 +553,7 @@ static void state_recv_log_in(struct server *s, struct raft_conn *conn)
 
 static void change_to_recv_log_in(struct server *s, struct raft_conn *conn)
 {
-	uint64_t machines_size = ntohll(conn->append_log_req.machines_size);
+	uint64_t machines_size = le64toh(conn->append_log_req.machines_size);
 	struct log *log = log_malloc(machines_size);
 	if (log) {
 		raft_conn_borrow_log(
@@ -575,11 +565,11 @@ static void change_to_recv_log_in(struct server *s, struct raft_conn *conn)
 }
 
 static bool state_authority_in(struct server *s, struct raft_conn *conn) {
-	uint64_t n = 0;
+	uint64_t k = 0;
 	unsigned char buffer[1024];
 	while (true) {
-		ssize_t k = read(conn->sockfd, buffer, 1024);
-		if (k == -1) {
+		ssize_t n = read(conn->fd, buffer, 1024);
+		if (n == -1) {
 			if (errno == EWOULDBLOCK) {
 				break;
 			} else {
@@ -587,16 +577,16 @@ static bool state_authority_in(struct server *s, struct raft_conn *conn) {
 				return false;
 			}
 		} else {
-			for (int i = 0; i < k; i++)
-				n += buffer[i];
+			for (int i = 0; i < n; i++)
+				k += buffer[i];
 
-			if (k < 1024)
+			if (n < 1024)
 				break;
 		}
 	}
 
 	// Note: don't check (n > 0), make it faster
-	conn->authority_pending_nr += n;
+	conn->authority_pending_nr += k;
 	s->leader.replicate_entry = true;
 	return true;
 }
@@ -617,14 +607,39 @@ static void state_authority_out(struct raft_conn *conn)
 static void change_to_authority_out(struct server *s, struct raft_conn *conn)
 {
 	struct authority_approval *res = &conn->authority_approval;
-	res->version = htonll(s->log->version);
-	res->count = htonll(conn->authority_succeed_nr);
+	res->version = htole64(s->log->version);
+	res->count = htole64(conn->authority_succeed_nr);
 	conn->authority_succeed_nr = 0;
 	raft_conn_set_io(conn, RAFT_CONN_STATE_AUTHORITY_OUT, sizeof(*res));
 	state_authority_out(conn);
 }
 
-static bool log_commited(struct server *s, struct member *m)
+static void conn_authority_approved(struct server *s, struct raft_conn *conn)
+{
+	conn->authority_succeed_nr += conn->authority_processing_nr;
+	conn->authority_processing_nr = 0;
+
+	if (conn->state == RAFT_CONN_STATE_AUTHORITY_PENDING && conn->authority_succeed_nr > 0)
+		change_to_authority_out(s, conn);
+}
+
+static void server_authority_approved(struct server *s)
+{
+	struct raft_conn *curr, *temp;
+	list_for_each_entry_safe(curr, temp, &s->authority, authority)
+		conn_authority_approved(s, curr);
+}
+
+static void server_authority_process(struct server *s)
+{
+	struct raft_conn *curr;
+	list_for_each_entry(curr, &s->authority, authority) {
+		curr->authority_processing_nr += curr->authority_pending_nr;
+		curr->authority_pending_nr = 0;
+	}
+}
+
+static bool member_commited_log(struct server *s, struct member *m)
 {
 	if (m->match_index == m->next_index - 1)
 		return true;
@@ -651,26 +666,26 @@ static bool log_commited(struct server *s, struct member *m)
 		return true;
 
 	case LOG_TYPE_GROW_TRANSFORM:
-		new = log_malloc_grow_complete(log, s->current_term);
+		new = log_malloc_grow_complete(log, s->term);
 		break;
 
 	default:
 		assert(log->type & LOG_TYPE_UNSTABLE_MASK);
 
 	#ifdef TEST_ELECTION_WITH_UNSTABLE_LOG
-		if (s->current_term == 1)
+		if (s->term == 1)
 			exit(EXIT_SUCCESS);
 	#endif
 
 	#ifdef TEST_ELECTION_WITH_UNSTABLE_GROW_LOG
 		if ((log->type == LOG_TYPE_GROW_COMPLETE ||
 		     log->type == LOG_TYPE_GROW_CHANGE_AVAILABLE) &&
-		     s->current_term == 1) {
+		     s->term == 1) {
 			exit(EXIT_SUCCESS);
-		     }
+		}
 	#endif
 
-		assert(s->current_term == log->term);
+		assert(s->term == log->term);
 		new = log_malloc_stable(log);
 		break;
 	}
@@ -700,7 +715,7 @@ static void state_append_log_out(struct raft_conn *conn)
 	debug_printf("RAFT_CONN_STATE_APPEND_LOG_OUT:\n");
 
 	struct append_log_req *req = &conn->append_log_req;
-	uint64_t machines_size = ntohll(req->machines_size);
+	uint64_t machines_size = le64toh(req->machines_size);
 	struct iovec iov[2];
 	int iov_len;
 	if (conn->unio <= machines_size) {
@@ -729,17 +744,17 @@ static void change_to_append_log_out(struct server *s, struct member *member)
 	struct append_log_req *req = &conn->append_log_req;
 	req->cmd = RAFT_CMD_APPEND_LOG;
 	req->type = log->type;
-	req->machines_size = htonll(machines_size);
-	req->term = htonll(s->current_term);
-	req->leader_id = htonl(s->id);
-	req->follower_id = htonl(member->id);
-	req->log_index = htonll(log->index);
-	req->log_term = htonll(log->term);
-	req->version = htonll(log->version);
-	req->next_machine_version = htonll(log->next_machine_version);
-	req->next_machine_id = htonl(log->next_machine_id);
-	req->new_machine_nr = htonl(log->new_n);
-	req->distinct_machines_n = htonll(log->distinct_machines_n);
+	req->machines_size = htole64(machines_size);
+	req->term = htole64(s->term);
+	req->leader_id = htole32(s->id);
+	req->follower_id = htole32(member->id);
+	req->log_index = htole64(log->index);
+	req->log_term = htole64(log->term);
+	req->version = htole64(log->version);
+	req->next_machine_version = htole64(log->next_machine_version);
+	req->next_machine_id = htole32(log->next_machine_id);
+	req->new_machine_nr = htole32(log->new_n);
+	req->distinct_machines_n = htole64(log->distinct_machines_n);
 
 	uint64_t size = sizeof(*req) + machines_size;
 	raft_conn_borrow_log(conn, log, RAFT_CONN_STATE_APPEND_LOG_OUT, size);
@@ -759,9 +774,9 @@ static void state_recv_heartbeat_in(struct server *s, struct raft_conn *conn)
 	 * apply the log first before sending heartbeat.
 	 */
 	struct heartbeat_req *req = &conn->heartbeat_req;
-	uint64_t term = ntohll(req->term);
-	assert(term <= s->current_term);
-	if (term == s->current_term) {
+	uint64_t term = le64toh(req->term);
+	assert(term <= s->term);
+	if (term == s->term) {
 		assert(s->state == SERVER_STATE_FOLLOWER);
 		reset_timer(s);
 	}
@@ -786,7 +801,7 @@ static void change_to_heartbeat_out(struct server *s, struct raft_conn *conn)
 {
 	struct heartbeat_req *req = &conn->heartbeat_req;
 	req->cmd = RAFT_CMD_HEARTBEAT;
-	req->term = htonll(s->current_term);
+	req->term = htole64(s->term);
 
 	raft_conn_set_io(conn, RAFT_CONN_STATE_HEARTBEAT_OUT, sizeof(*req));
 	state_heartbeat_out(conn);
@@ -812,33 +827,32 @@ static void state_append_entry_in(struct server *s, struct raft_conn *conn)
 
 	enum raft_conn_state state = conn->state;
 	struct append_entry_res *res = &conn->append_entry_res;
-	uint64_t term = ntohll(res->term);
+	uint64_t term = le64toh(res->term);
 	bool applied = res->applied;
 
 	raft_conn_change_to_ready_for_use(conn);
 
-	if (term > s->current_term) {
+	if (term > s->term) {
 		server_increase_term(s, term);
 		return;
 	}
 
-	assert(term == s->current_term && s->state == SERVER_STATE_LEADER);
+	// Note: once leader steps down, we will stop process outgoing
+	// connections in this epoll round.
+	assert(term == s->term && s->state == SERVER_STATE_LEADER);
 
-	struct member *member = container_of(conn, struct member, conn);
-	member->responded_append_entry = true;
+	struct member *m = container_of(conn, struct member, conn);
+	m->responded_append_entry = true;
 	if (state == RAFT_CONN_STATE_APPEND_LOG_IN)
-		member->next_index++;
+		m->next_index++;
 
-	if (applied && !log_commited(s, member)) {
+	if (applied && !member_commited_log(s, m)) {
 		convert_to_follower(s);
-	} else if (member->append_entry_round == s->leader.replicate_entry_round) {
-		if (member->type & MEMBER_TYPE_OLD)
-			s->leader.commit_entry_required_old_votes--;
-		
-		if (member->type & MEMBER_TYPE_NEW)
-			s->leader.commit_entry_required_new_votes--;
+	} else if (m->append_entry_round == s->leader.replicate_entry_round) {
+		s->leader.commit_entry_required_old_votes -= MEMBER_IN_OLD(m->type);
+		s->leader.commit_entry_required_new_votes -= MEMBER_IN_NEW(m->type);
 	} else {
-		change_to_append_entry_out(s, member);
+		change_to_append_entry_out(s, m);
 	}
 }
 
@@ -868,24 +882,28 @@ static void state_init_cluster_in(struct server *s, struct raft_conn *conn)
 	debug_printf("RAFT_CONN_STATE_INIT_CLUSTER_IN:\n");
 
 	struct log *log = conn->log;
-	uint64_t machines_size = ntohll(conn->change_cluster_req.machines_size);
+	uint64_t machines_size = le64toh(conn->change_cluster_req.machines_size);
 	uint64_t readed = machines_size - conn->unio;
 	if (!raft_conn_full_read(conn, true, (unsigned char *)log->machines + readed))
 		return;
 
 	if (s->log->index == 0 && log_complete_init(log)) {
+		assert(s->cluster == NULL);
+		s->cluster = cluster_malloc(log, 1);
+		must(s->cluster);
+
 		s->id = 1;
-		s->current_term = 1;
-		assert(s->current_term == log->term);
+		s->term = 1;
+		assert(s->term == log->term);
 		set_timer(s, 1);
 
 		s->state = SERVER_STATE_LEADER;
 		s->leader.replicate_entry_round = 0;
-		s->leader.replicate_entry = true;
 		s->leader.entry_commited = true;
+		s->leader.replicate_entry = true;
 		s->leader.available = true;
 
-		must(leader_replace_log(s, log));
+		server_replace_log(s, log);
 	}
 	change_to_init_cluster_out(conn);
 }
@@ -893,7 +911,7 @@ static void state_init_cluster_in(struct server *s, struct raft_conn *conn)
 static void change_to_init_cluster_in(struct server *s, struct raft_conn *conn)
 {
 	struct change_cluster_req *req = &conn->change_cluster_req;
-	uint64_t machines_size = ntohll(req->machines_size);
+	uint64_t machines_size = le64toh(req->machines_size);
 	if (machines_size_valid(machines_size)) {
 		struct log *log = log_malloc_init(machines_size);
 		if (log) {
@@ -915,7 +933,7 @@ static void state_change_cluster_in(struct server *s, struct raft_conn *conn)
 	debug_printf("RAFT_CONN_STATE_CHANGE_CLUSTER_IN:\n");
 
 	struct log *log = conn->log;
-	uint64_t machines_size = ntohll(conn->change_cluster_req.machines_size);
+	uint64_t machines_size = le64toh(conn->change_cluster_req.machines_size);
 	uint64_t readed = machines_size - conn->unio;
 	unsigned char *machines = (unsigned char *)(log->machines + log->old_n);
 	if (!raft_conn_full_read(conn, true, machines + readed))
@@ -924,7 +942,7 @@ static void state_change_cluster_in(struct server *s, struct raft_conn *conn)
 	if (s->state == SERVER_STATE_LEADER &&
 	    s->log->type == LOG_TYPE_OLD &&
 	    s->log->old_n == log->old_n &&
-	    log_complete_change(log, s->log, s->current_term)) {
+	    log_complete_change(log, s->log, s->term)) {
 		leader_replace_log(s, log);
 
 	#ifdef TEST_VOTE_WITH_LOG0
@@ -937,7 +955,7 @@ static void state_change_cluster_in(struct server *s, struct raft_conn *conn)
 static void change_to_change_cluster_in(struct server *s, struct raft_conn *conn)
 {
 	struct change_cluster_req *req = &conn->change_cluster_req;
-	uint64_t machines_size = ntohll(req->machines_size);
+	uint64_t machines_size = le64toh(req->machines_size);
 	if (machines_size_valid(machines_size)) {
 		uint32_t n = machines_size / MACHINE_SIZE;
 		struct log *log = log_malloc_unstable(s->log->old_n, n);
@@ -999,7 +1017,7 @@ static void state_cluster_out(struct raft_conn *conn)
 	debug_printf("RAFT_CONN_STATE_CLUSTER_OUT:\n");
 
 	struct cluster_res *res = &conn->cluster_res;
-	uint64_t machines_size = ntohll(res->machines_size);
+	uint64_t machines_size = le64toh(res->machines_size);
 	struct iovec iov[2];
 	int iov_len;
 	if (conn->unio <= machines_size) {
@@ -1028,8 +1046,8 @@ static void change_to_cluster_out(struct server *s, struct raft_conn *conn)
 
 	struct cluster_res *res = &conn->cluster_res;
 	res->type = log->type;
-	res->machines_size = htonll(machines_size);
-	res->version = htonll(log->version);
+	res->machines_size = htole64(machines_size);
+	res->version = htole64(log->version);
 
 	uint64_t size = sizeof(*res) + machines_size;
 	raft_conn_borrow_log(conn, log, RAFT_CONN_STATE_CLUSTER_OUT, size);
@@ -1038,12 +1056,12 @@ static void change_to_cluster_out(struct server *s, struct raft_conn *conn)
 
 static void state_connect_in(struct server *s, struct raft_conn *conn)
 {
-	uint32_t thread_id = ntohl(conn->connect_req.thread_id);
+	uint32_t thread_id = le32toh(conn->connect_req.thread_id);
 	if (thread_id >= CONFIG_THREAD_NR) {
 		raft_conn_free(conn);
 	} else {
-		epoll_del(s->epfd, conn->sockfd);
-		thread_dispatch(thread_id, conn->sockfd);
+		epoll_del(s->epfd, conn->fd);
+		thread_dispatch(thread_id, conn->fd);
 		free(conn);
 	}
 }
@@ -1112,7 +1130,7 @@ static void state_in_cmd(struct server *s, struct raft_conn *conn)
 	case RAFT_CMD_AUTHORITY:
 		assert(readed == 1);
 		debug_printf("RAFT_CMD_AUTHORITY:\n");
-		list_add(&s->authority_list, &conn->authority_node);
+		list_add(&s->authority, &conn->authority);
 		conn->authority_pending_nr = 0;
 		conn->authority_processing_nr = 0;
 		conn->authority_succeed_nr = 0;
@@ -1181,7 +1199,7 @@ static void change_to_conn_established(struct server *s, struct raft_conn *conn)
 	assert(conn->state == RAFT_CONN_STATE_IN_PROGRESS);
 
 	struct member *m = container_of(conn, struct member, conn);
-	if (tls_init_client(&conn->session, conn->sockfd, m->sin6_addr)) {
+	if (tls_init_client(&conn->session, conn->fd, m->sin6_addr)) {
 		conn->state = RAFT_CONN_STATE_TLS_CLIENT_HANDSHAKE_OUT;
 		state_tls_client_handshake(s, conn);
 	} else {
@@ -1201,7 +1219,7 @@ static void state_in_progress(struct server *s, struct raft_conn *conn)
 
 	int optval;
 	socklen_t optlen = sizeof(int);
-	int ret = getsockopt(conn->sockfd, SOL_SOCKET, SO_ERROR, &optval, &optlen);
+	int ret = getsockopt(conn->fd, SOL_SOCKET, SO_ERROR, &optval, &optlen);
 	if (ret == 0 && optval == 0)
 		change_to_conn_established(s, conn);
 	else
@@ -1215,18 +1233,18 @@ static void member_connect(struct server *s, struct member *m)
 
 	char str[INET6_ADDRSTRLEN] __attribute__((unused));
 	debug_printf("try connect: id: %d addr: %s port: %d\n", m->id,
-			member_string_address(m, str), ntohs(m->sin6_port));
+		member_string_address(m, str), __builtin_bswap16(m->sin6_port));
 
-	int sockfd = socket(AF_INET6, SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
-	if (sockfd == -1)
+	int fd = socket(AF_INET6, SOCK_STREAM | SOCK_NONBLOCK, IPPROTO_TCP);
+	if (fd == -1)
 		return;
 
 	int opt = 1;
 	struct linger ling = {0, 0};
-	if (setsockopt(sockfd, SOL_SOCKET, SO_LINGER, &ling, sizeof(ling))  ||
-	    setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) ||
-	    !epoll_add(s->epfd, sockfd, (uint64_t)conn | 1)) {
-		close(sockfd);
+	if (setsockopt(fd, SOL_SOCKET, SO_LINGER, &ling, sizeof(ling))  ||
+	    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) ||
+	    !epoll_add(s->epfd, fd, (uint64_t)conn | 1)) {
+		close(fd);
 		return;
 	};
 
@@ -1238,15 +1256,15 @@ static void member_connect(struct server *s, struct member *m)
 	addr->sin6_addr = m->sin6_addr;
 	addr->sin6_scope_id = 0;
 
-	conn->sockfd = sockfd;
-	int ret = connect(sockfd, (struct sockaddr *)addr, sizeof(*addr));
+	conn->fd = fd;
+	int ret = connect(fd, (struct sockaddr *)addr, sizeof(*addr));
 	if (ret == 0) {
 		conn->state = RAFT_CONN_STATE_IN_PROGRESS;
 		change_to_conn_established(s, conn);
 	} else if (errno == EINPROGRESS) {
 		conn->state = RAFT_CONN_STATE_IN_PROGRESS;
 	} else {
-		close(sockfd);
+		close(fd);
 	}
 }
 
@@ -1254,18 +1272,27 @@ static void replicate_entry(struct server *s)
 {
 	assert(s->state == SERVER_STATE_LEADER);
 
-	struct raft_conn *curr;
-	list_for_each_entry(curr, &s->authority_list, authority_node) {
-		curr->authority_processing_nr += curr->authority_pending_nr;
-		curr->authority_pending_nr = 0;
+	if (!s->leader.entry_commited) {
+		if (s->leader.commit_entry_required_old_votes > 0 ||
+		    s->leader.commit_entry_required_new_votes > 0) {
+			return;
+		}
+
+		s->leader.entry_commited = true;
+		server_authority_approved(s);
 	}
 
+	if (!s->leader.replicate_entry)
+		return;
+
+	server_authority_process(s);
+
 	struct cluster *cl = s->cluster;
+	s->leader.replicate_entry_round++;
 	s->leader.commit_entry_required_old_votes = cl->require_old_votes;
 	s->leader.commit_entry_required_new_votes = cl->require_new_votes;
-	s->leader.replicate_entry_round++;
-	s->leader.replicate_entry = false;
 	s->leader.entry_commited = false;
+	s->leader.replicate_entry = false;
 
 	for (uint32_t i = 0; i < cl->members_n; i++) {
 		struct member *m = cl->members + i;
@@ -1306,22 +1333,23 @@ static void convert_to_candidate(struct server *s)
 			return;
 
 		s->state = SERVER_STATE_CANDIDATE;
-		server_replace_cluster(s, cl);
+		assert(s->cluster == NULL);
+		s->cluster = cl;
 	}
+	assert(s->state == SERVER_STATE_CANDIDATE);
 
 	struct cluster *cl = s->cluster;
-	s->current_term++;
+	s->term++;
 	s->candidate.required_old_votes = cl->require_old_votes;
 	s->candidate.required_new_votes = cl->require_new_votes;
 	reset_timer_hard(s);
-	debug_printf("convert to candidate: %ld\n", s->current_term);
+	debug_printf("convert to candidate: %ld\n", s->term);
 
 	for (uint64_t i = 0; i < cl->members_n; i++) {
-		struct member *m = &cl->members[i];
-		struct raft_conn *conn = &m->conn;
-		switch (conn->state) {
+		struct member *m = cl->members + i;
+		switch (m->conn.state) {
 		case RAFT_CONN_STATE_READY_FOR_USE:
-			change_to_request_vote_out(s, conn);
+			change_to_request_vote_out(s, &m->conn);
 			break;
 		case RAFT_CONN_STATE_NOT_CONNECTED:
 			member_connect(s, m);
@@ -1340,7 +1368,7 @@ static void start_election(struct server *s)
 /**
  * leader_timer_ticked - Check leader authority and member availability
  * 
- * @return: true if leader can reach majority of the members, false otherwise
+ * @return: true if leader can remain, false otherwise
  */
 static bool leader_timer_ticked(struct server *s)
 {
@@ -1362,11 +1390,8 @@ static bool leader_timer_ticked(struct server *s)
 		}
 
 		if (m->available) {
-			if (m->type & MEMBER_TYPE_OLD)
-				old_available++;
-
-			if (m->type & MEMBER_TYPE_NEW)
-				new_available++;
+			old_available += MEMBER_IN_OLD(m->type);
+			new_available += MEMBER_IN_NEW(m->type);
 		}
 	}
 
@@ -1499,40 +1524,23 @@ static void process(struct server *s, struct raft_conn *conn)
 	}
 }
 
-static void conn_authority_approved(struct server *s, struct raft_conn *conn)
-{
-	conn->authority_succeed_nr += conn->authority_processing_nr;
-	conn->authority_processing_nr = 0;
-
-	if (conn->state == RAFT_CONN_STATE_AUTHORITY_PENDING && conn->authority_succeed_nr > 0)
-		change_to_authority_out(s, conn);
-}
-
-static void authority_approved(struct server *s)
-{
-	s->leader.entry_commited = true;
-	struct raft_conn *curr, *temp;
-	list_for_each_entry_safe(curr, temp, &s->authority_list, authority_node)
-		conn_authority_approved(s, curr);
-}
-
-static void loop_forever(struct server *s, int sockfd, int admin_sockfd, in_port_t port)
+static void loop_forever(struct server *s, int fd, int admin_fd, in_port_t port)
 {
 	while (true) {
 		struct epoll_event *events = s->events;
 		int n;
-		if (sockfd != -1 && admin_sockfd != -1) {
-			n = epoll_wait(s->epfd, events, SERVER_MAX_EPOLL_EVENTS, -1);
+		if (fd != -1 && admin_fd != -1) {
+			n = epoll_wait(s->epfd, events, MAX_EPOLL_EVENTS, -1);
 		} else {
 			sleep(3);
-			if (sockfd == -1)
-				sockfd = listen_user(s->epfd, port);
+			if (fd == -1)
+				fd = listen_user(s->epfd, port);
 
-			if (admin_sockfd == -1)
-				admin_sockfd = listen_admin(s->epfd, port);
+			if (admin_fd == -1)
+				admin_fd = listen_admin(s->epfd, port);
 
 			/* in case listen failed, don't wait epoll */
-			n = epoll_wait(s->epfd, events, SERVER_MAX_EPOLL_EVENTS, 0);
+			n = epoll_wait(s->epfd, events, MAX_EPOLL_EVENTS, 0);
 		}
 
 		for (int i = 0; i < n; i++) {
@@ -1543,15 +1551,15 @@ static void loop_forever(struct server *s, int sockfd, int admin_sockfd, in_port
 				process_timer_event(s);
 				break;
 			case ACCEPT_EVENT_U64:
-				if (!_accept(s, sockfd, false)) {
-					close(sockfd);
-					sockfd = -1;
+				if (!_accept(s, fd, false)) {
+					close(fd);
+					fd = -1;
 				}
 				break;
 			case ACCEPT_ADMIN_EVENT_U64:
-				if (!_accept(s, admin_sockfd, true)) {
-					close(admin_sockfd);
-					admin_sockfd = -1;
+				if (!_accept(s, admin_fd, true)) {
+					close(admin_fd);
+					admin_fd = -1;
 				}
 				break;
 			default:
@@ -1578,16 +1586,10 @@ static void loop_forever(struct server *s, int sockfd, int admin_sockfd, in_port
 		}
 
 		if (s->state == SERVER_STATE_LEADER) {
-			if (!s->leader.entry_commited &&
-				s->leader.commit_entry_required_old_votes <= 0 &&
-			   	s->leader.commit_entry_required_new_votes <= 0) {
-				authority_approved(s);
-			}
-			if (s->leader.entry_commited && s->leader.replicate_entry)
-				replicate_entry(s);
+			replicate_entry(s);
 		} else {
 			struct raft_conn *curr, *temp;
-			list_for_each_entry_safe(curr, temp, &s->authority_list, authority_node)
+			list_for_each_entry_safe(curr, temp, &s->authority, authority)
 				raft_conn_free(curr);
 		}
 
@@ -1606,10 +1608,10 @@ void must_service_run(int port)
 	must(threads_run());
 	must_server_init(&__s);
 
-	int sockfd = listen_user(__s.epfd, port);
-	must(sockfd != -1);
-	int admin_sockfd = listen_admin(__s.epfd, port);
-	must(admin_sockfd != -1);
+	int fd = listen_user(__s.epfd, port);
+	must(fd != -1);
+	int admin_fd = listen_admin(__s.epfd, port);
+	must(admin_fd != -1);
 
-	loop_forever(&__s, sockfd, admin_sockfd, port);
+	loop_forever(&__s, fd, admin_fd, port);
 }

@@ -10,7 +10,6 @@
 #include <time.h>
 #include <assert.h>
 #include "thread.h"
-#include "encoding.h"
 #include "rwonce.h"
 #include "epoll.h"
 #include "debug.h"
@@ -93,13 +92,13 @@ static void kv_cache_list_init(struct kv_cache kv_cache_list[KV_CACHE_LEN])
  * 
  * @return: the allocated conn on success, or NULL on failure
  */
-static struct conn *conn_malloc(struct thread *t, int sockfd)
+static struct conn *conn_malloc(struct thread *t, int fd)
 {
 	struct conn *conn = fixed_mem_cache_malloc(&t->conn_cache);
 	if (conn) {
 		conn->state = CONN_STATE_OUT_SUCCESS;
-		conn->clock_time_left = 0;
-		conn->sockfd = sockfd;
+		conn->clock_called = false;
+		conn->fd = fd;
 		kv_borrower_init(&conn->kv_borrower);
 	}
 	return conn;
@@ -110,7 +109,7 @@ static struct conn *conn_malloc(struct thread *t, int sockfd)
  */
 static void conn_free(struct thread *t, struct conn *conn)
 {
-	close(conn->sockfd);
+	close(conn->fd);
 	fixed_mem_cache_free(&t->conn_cache, conn);
 }
 
@@ -382,17 +381,17 @@ static bool conn_with_key_locked(struct conn *conn)
 
 static void call_clock(struct thread *t, struct conn *conn)
 {
-	if (conn->clock_time_left == 0) {
-		conn->clock_time_left = 2;
-		hlist_add(&t->clock_list, &conn->clock_node);
+	if (!conn->clock_called) {
+		conn->clock_called = true;
+		hlist_add(&t->clock_probation, &conn->clock);
 	}
 }
 
 static void cancel_clock(struct conn *conn)
 {
-	if (conn->clock_time_left > 0) {
-		conn->clock_time_left = 0;
-		hlist_del(&conn->clock_node);
+	if (conn->clock_called) {
+		conn->clock_called = false;
+		hlist_del(&conn->clock);
 	}
 }
 
@@ -458,7 +457,7 @@ static bool conn_read(
 struct thread *t, struct conn *conn, unsigned char *buffer)
 {
 	assert(conn->unio > 0);
-	ssize_t n = read(conn->sockfd, buffer, conn->unio);
+	ssize_t n = read(conn->fd, buffer, conn->unio);
 	return conn_check_read(t, conn, n);
 }
 
@@ -476,7 +475,7 @@ struct thread *t, struct conn *conn, struct iovec *iov, size_t iovlen)
 	msg.msg_iovlen = iovlen;
 
 	assert(conn->unio > 0);
-	ssize_t n = recvmsg(conn->sockfd, &msg, 0);
+	ssize_t n = recvmsg(conn->fd, &msg, 0);
 	return conn_check_read(t, conn, n);
 }
 
@@ -510,7 +509,7 @@ static bool conn_write(
 struct thread *t, struct conn *conn, const unsigned char *buffer)
 {
 	assert(conn->unio > 0);
-	ssize_t n = send(conn->sockfd, buffer, conn->unio, MSG_NOSIGNAL);
+	ssize_t n = send(conn->fd, buffer, conn->unio, MSG_NOSIGNAL);
 	return conn_check_write(t, conn, n);
 }
 
@@ -539,7 +538,7 @@ struct thread *t, struct conn *conn, struct iovec *iov, size_t iovlen)
 	msg.msg_iovlen = iovlen;
 
 	assert(conn->unio > 0);
-	ssize_t n = sendmsg(conn->sockfd, &msg, MSG_NOSIGNAL);
+	ssize_t n = sendmsg(conn->fd, &msg, MSG_NOSIGNAL);
 	return conn_check_write(t, conn, n);
 }
 
@@ -563,7 +562,7 @@ struct thread *t, struct conn *conn, struct iovec *iov, size_t iovlen)
 static bool conn_write_byte_zero(struct thread *t, struct conn *conn)
 {
 	static const unsigned char zero[1] = { 0 };
-	ssize_t n = send(conn->sockfd, &zero, 1, MSG_NOSIGNAL);
+	ssize_t n = send(conn->fd, &zero, 1, MSG_NOSIGNAL);
 	if (n > 0)
 		return true;
 
@@ -625,8 +624,8 @@ static void change_to_get_out_hit(struct thread *t, struct conn *conn)
 {
 	conn->state = CONN_STATE_GET_OUT_HIT;
 	conn->unio = GET_RES_SIZE + conn_kv(conn)->val_size;
+	conn->size = htole64(conn_kv(conn)->val_size);
 	conn->miss = false;
-	conn->size = htonll(conn_kv(conn)->val_size);
 	state_get_out_hit(t, conn);
 }
 
@@ -793,21 +792,21 @@ static void state_set_in_value_size(struct thread *t, struct conn *conn)
 	if (!conn_read_msg(t, conn, iov, 2) || conn->unio > SET_EXTRA_BUFFER)
 		return;
 
-	conn->val_size = ntohll(conn->size);
-	struct kv *kv = kv_malloc(t, conn->key, conn->val_size);
+	uint64_t val_size = le64toh(conn->size);
+	struct kv *kv = kv_malloc(t, conn->key, val_size);
 	if (kv == NULL) {
 		free_conn(t, conn);
 		return;
 	}
 
-	kv_init(kv, conn->key, conn->val_size);
+	kv_init(kv, conn->key, val_size);
 	kv_borrow(kv, &conn->kv_borrower);
 
 	uint64_t buffer_n = SET_EXTRA_BUFFER - conn->unio;
 	uint64_t n = kv_copy_val(kv, buffer, buffer_n);
-	if (n < kv->val_size) {
+	if (n < val_size) {
 		conn->state = CONN_STATE_SET_IN_VALUE;
-		conn->unio = conn_kv(conn)->val_size + CMD_SIZE_MAX - n;
+		conn->unio = val_size + CMD_SIZE_MAX - n;
 		if (buffer_n == SET_EXTRA_BUFFER) {
 			state_set_in_value(t, conn);
 		}
@@ -865,38 +864,45 @@ static void clock_service(struct thread *t, int timerfd)
 	assert(n == sizeof(exp));
 
 	struct hlist_node *curr, *temp;
-	hlist_for_each_safe(curr, temp, &t->clock_list) {
-		struct conn *conn = container_of(curr, struct conn, clock_node);
+	hlist_for_each_safe(curr, temp, &t->clock_death) {
+		struct conn *conn = container_of(curr, struct conn, clock);
 		assert(conn_with_key_locked(conn));
-		assert(conn->clock_time_left > 0);
-		if (exp >= conn->clock_time_left)
-			free_conn(t, conn);
-		else
-			conn->clock_time_left -= exp;
+		free_conn(t, conn);
+	}
+
+	if (!hlist_empty(&t->clock_probation)) {
+		t->clock_death = t->clock_probation;
+		t->clock_death.first->prev_next = &t->clock_death.first;
+		hlist_head_init(&t->clock_probation);
 	}
 }
 
-void thread_dispatch(uint32_t id, int sockfd)
+void thread_dispatch(uint32_t id, int fd)
 {
 	struct thread *t = threads + id;
-	if (!epoll_add_out(t->epfd, sockfd, ((uint64_t)sockfd << 32) | 1))
-		close(sockfd);
+	if (!epoll_add_out(t->epfd, fd, ((uint64_t)fd << 32) | 1))
+		close(fd);
 }
 
-static void thread_accept(struct thread *t, int sockfd)
+static void thread_accept(struct thread *t, int fd)
 {
-	struct conn *conn = conn_malloc(t, sockfd);
+	struct conn *conn = conn_malloc(t, fd);
 	if (conn) {
 		struct epoll_event event;
 		event.events = EPOLLIN | EPOLLOUT | EPOLLET;
 		event.data.ptr = conn;
 		int ret __attribute__((unused));
-		ret = epoll_ctl(t->epfd, EPOLL_CTL_MOD, conn->sockfd, &event);
+		ret = epoll_ctl(t->epfd, EPOLL_CTL_MOD, conn->fd, &event);
 		assert(ret == 0);
 	} else {
-		close(sockfd);
+		close(fd);
 	}
 }
+
+#define MAX_EVENTS ((sizeof(struct thread) - offsetof(struct thread, events)) / \
+			sizeof(struct epoll_event))
+
+static_assert(MAX_EVENTS >= THREAD_MAX_CONN);
 
 /**
  * grab_epoll_events - Grab events from epoll
@@ -904,13 +910,13 @@ static void thread_accept(struct thread *t, int sockfd)
 static void grab_epoll_events(struct thread *t)
 {
 	struct epoll_event *events = t->events;
-	int n = epoll_wait(t->epfd, events, THREAD_MAX_CONN, -1);
+	int n = epoll_wait(t->epfd, events, MAX_EVENTS, -1);
 	int timerfd = -1;
 	for (int i = 0; i < n; i++) {
 		static_assert(__alignof__(struct conn) % 8 == 0);
 
 		if (events[i].data.u64 & 1) {
-			/* main thread distribute sockfd to us */
+			/* main thread distribute socket fd to us */
 			thread_accept(t, events[i].data.u64 >> 32);
 		} else if (events[i].data.u64 & 2) {
 			/* this is a clock service */
@@ -971,7 +977,8 @@ static bool thread_init(struct thread *t)
 	t->s_lru_size = 0;
 	list_head_init(&t->s_lru_head);
 	list_head_init(&t->m_lru_head);
-	hlist_head_init(&t->clock_list);
+	hlist_head_init(&t->clock_probation);
+	hlist_head_init(&t->clock_death);
 	t->epfd = epoll_create1(0);
 	if (t->epfd == -1)
 		return false;

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+SHELL = /bin/bash
 
 CFLAGS = -std=gnu11 -O3 -g -Wall -Wextra -flto=auto -fwhole-program	       \
 	-D_GNU_SOURCE -include stdbool.h
@@ -76,7 +77,7 @@ endif
 SILENT = $(findstring s,$(firstword -$(MAKEFLAGS)))
 
 umem-cache: $(targets)
-	gcc $(CFLAGS) -o umem-cache $^
+	gcc $^ -o umem-cache $(CFLAGS)
 	@if [[ "$(SILENT)" != "s" ]]; then				       \
 		printf "\nExecute: ./umem-cache {{port}}";		       \
 		if [[ "x$(TLS)" != "x" && "x$(TLS)" != "x0" ]]; then	       \

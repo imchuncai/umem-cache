@@ -36,11 +36,10 @@ enum conn_state {
 
 /**
  * conn - Structure describes connection
- * @clock_time_left: time ticks remain before timeout, 0 for clock not called
- * @sockfd: connection bound socket file descriptor
+ * @fd: connection bound socket file descriptor
  * @kv_borrower: borrows kv for operation
- * @val_size: value size received from client
- * @clock_node: resides in (struct thread->clock_list) when clock is called
+ * @clock: resides in (struct thread->clock_probation) when clock is called and
+ * may move to (struct thread->clock_death) later
  * @unio: number of bytes not read() or write()
  * @hash_node: resides in (struct thread->hash_table) before malloc kv
  * @key: key received from client
@@ -53,13 +52,12 @@ struct conn {
 			bool miss;
 
 			enum conn_state state;
-			unsigned char clock_time_left;
-			int sockfd;
+			bool clock_called;
+			int fd;
 		};
 	};
 	struct kv_borrower kv_borrower;
-	uint64_t val_size;
-	struct hlist_node clock_node;
+	struct hlist_node clock;
 	struct list_head interest;
 	uint64_t unio;
 	struct hlist_node hash_node;

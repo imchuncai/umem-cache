@@ -52,7 +52,7 @@ enum raft_conn_state {
 struct raft_conn {
 	struct log *log;
 	uint64_t unio;
-	int sockfd;
+	int fd;
 	bool admin;
 	enum raft_conn_state state;
 	union {
@@ -68,7 +68,7 @@ struct raft_conn {
 		unsigned char buffer[RAFT_CONN_BUFFER_SIZE];
 		struct {
 			struct authority_approval authority_approval;
-			struct list_head authority_node;
+			struct list_head authority;
 			uint64_t authority_pending_nr;
 			uint64_t authority_processing_nr;
 			uint64_t authority_succeed_nr;
@@ -80,7 +80,7 @@ struct raft_conn {
 } __attribute__((aligned(8)));
 /* alignment is required for epoll to distinguish incoming and outgoing connections */
 
-struct raft_conn *raft_in_conn_malloc(int sockfd, bool admin, struct in6_addr peer);
+struct raft_conn *raft_in_conn_malloc(int fd, bool admin, struct in6_addr peer);
 void raft_out_conn_init(struct raft_conn *conn);
 void raft_conn_set_io(
 	struct raft_conn *conn, enum raft_conn_state state, uint64_t size);
