@@ -379,12 +379,17 @@ static bool conn_with_key_locked(struct conn *conn)
 	return conn->state > CONN_STATE_FREE;
 }
 
+static void __call_clock(struct thread *t, struct conn *conn)
+{
+	assert(!conn->clock_called);
+	conn->clock_called = true;
+	hlist_add(&t->clock_probation, &conn->clock);
+}
+
 static void call_clock(struct thread *t, struct conn *conn)
 {
-	if (!conn->clock_called) {
-		conn->clock_called = true;
-		hlist_add(&t->clock_probation, &conn->clock);
-	}
+	if (!conn->clock_called)
+		__call_clock(t, conn);
 }
 
 static void cancel_clock(struct conn *conn)
@@ -395,20 +400,43 @@ static void cancel_clock(struct conn *conn)
 	}
 }
 
-static void cmd_get(struct thread *t, struct conn *conn);
+static void __change_to_get_out_miss(struct conn *conn)
+{
+	conn->state = CONN_STATE_GET_OUT_MISS;
+	conn->unio = GET_RES_SIZE;
+	conn->miss = true;
+}
+
+static void epfd_weak_up_conn(struct thread *t, struct conn *conn)
+{
+	struct epoll_event event;
+	event.events = EPOLLIN | EPOLLOUT | EPOLLET;
+	event.data.ptr = conn;
+	int ret __attribute__((unused));
+	ret = epoll_ctl(t->epfd, EPOLL_CTL_MOD, conn->fd, &event);
+	assert(ret == 0);
+}
 
 static void conn_unlock_key_for_failure(struct thread *t, struct conn *conn)
 {
 	cancel_clock(conn);
-	hash_del(&t->hash_table, conn->key);
 	if (conn_kv(conn))
 		conn_return_kv(t, conn);
 
-	struct conn *curr, *temp;
-	list_for_each_entry_safe(curr, temp, &conn->interest, interest) {
-		list_del(&curr->interest);
-		cmd_get(t, curr);
+	if (list_empty(&conn->interest)) {
+		hash_del(&t->hash_table, conn->key);
+		return;
 	}
+
+	struct conn *first;
+	first = list_first_entry(&conn->interest, struct conn, interest);
+	list_del(&conn->interest);
+	first->hash_node = conn->hash_node;
+	hlist_node_fix(&first->hash_node);
+	__call_clock(t, first);
+	// Note: don't call change_to_get_out_miss(), we should not trust client 
+	__change_to_get_out_miss(first);
+	epfd_weak_up_conn(t, first);
 }
 
 /**
@@ -651,9 +679,7 @@ static void state_get_out_miss(struct thread *t, struct conn *conn)
 
 static void change_to_get_out_miss(struct thread *t, struct conn *conn)
 {
-	conn->state = CONN_STATE_GET_OUT_MISS;
-	conn->unio = GET_RES_SIZE;
-	conn->miss = true;
+	__change_to_get_out_miss(conn);
 	state_get_out_miss(t, conn);
 }
 
@@ -675,15 +701,20 @@ static void cmd_get(struct thread *t, struct conn *conn)
 	}
 }
 
+static void change_locked_to_free(struct thread *t, struct conn *conn)
+{
+	assert(conn_with_key_locked(conn));
+	conn_unlock_key_for_failure(t, conn);
+	conn->state = CONN_STATE_FREE;
+}
+
 static void cmd_del(struct thread *t, struct conn *conn)
 {
 	struct hlist_node *node = hash_get(&t->hash_table, conn->key, &t->memory);
 	if (node == NULL) {
 	} else if (thread_range(node)) {
 		struct conn *lock_conn = container_of(node, struct conn, hash_node);
-		assert(conn_with_key_locked(lock_conn));
-		conn_unlock_key_for_failure(t, lock_conn);
-		lock_conn->state = CONN_STATE_FREE;
+		change_locked_to_free(t, lock_conn);
 	} else {
 		struct kv *kv = container_of(node, struct kv, hash_node);
 		kv_disable(t, kv);
@@ -857,26 +888,6 @@ static void process_conn(struct thread *t, struct conn *conn)
 	}
 }
 
-static void clock_service(struct thread *t, int timerfd)
-{
-	uint64_t exp;
-	size_t n __attribute__((unused)) = read(timerfd, &exp, sizeof(exp));
-	assert(n == sizeof(exp));
-
-	struct hlist_node *curr, *temp;
-	hlist_for_each_safe(curr, temp, &t->clock_death) {
-		struct conn *conn = container_of(curr, struct conn, clock);
-		assert(conn_with_key_locked(conn));
-		free_conn(t, conn);
-	}
-
-	if (!hlist_empty(&t->clock_probation)) {
-		t->clock_death = t->clock_probation;
-		t->clock_death.first->prev_next = &t->clock_death.first;
-		hlist_head_init(&t->clock_probation);
-	}
-}
-
 void thread_dispatch(uint32_t id, int fd)
 {
 	struct thread *t = threads + id;
@@ -887,15 +898,28 @@ void thread_dispatch(uint32_t id, int fd)
 static void thread_accept(struct thread *t, int fd)
 {
 	struct conn *conn = conn_malloc(t, fd);
-	if (conn) {
-		struct epoll_event event;
-		event.events = EPOLLIN | EPOLLOUT | EPOLLET;
-		event.data.ptr = conn;
-		int ret __attribute__((unused));
-		ret = epoll_ctl(t->epfd, EPOLL_CTL_MOD, conn->fd, &event);
-		assert(ret == 0);
-	} else {
+	if (conn)
+		epfd_weak_up_conn(t, conn);
+	else
 		close(fd);
+}
+
+static void clock_service(struct thread *t, int timerfd)
+{
+	uint64_t exp;
+	size_t n __attribute__((unused)) = read(timerfd, &exp, sizeof(exp));
+	assert(n == sizeof(exp));
+
+	struct hlist_node *curr, *temp;
+	hlist_for_each_safe(curr, temp, &t->clock_death) {
+		struct conn *conn = container_of(curr, struct conn, clock);
+		change_locked_to_free(t, conn);
+	}
+
+	if (!hlist_empty(&t->clock_probation)) {
+		t->clock_death = t->clock_probation;
+		t->clock_death.first->prev_next = &t->clock_death.first;
+		hlist_head_init(&t->clock_probation);
 	}
 }
 
@@ -911,7 +935,6 @@ static void grab_epoll_events(struct thread *t)
 {
 	struct epoll_event *events = t->events;
 	int n = epoll_wait(t->epfd, events, MAX_EVENTS, -1);
-	int timerfd = -1;
 	for (int i = 0; i < n; i++) {
 		static_assert(__alignof__(struct conn) % 8 == 0);
 
@@ -920,7 +943,7 @@ static void grab_epoll_events(struct thread *t)
 			thread_accept(t, events[i].data.u64 >> 32);
 		} else if (events[i].data.u64 & 2) {
 			/* this is a clock service */
-			timerfd = events[i].data.u64 >> 32;
+			clock_service(t, events[i].data.u64 >> 32);
 		} else {
 			struct conn *conn = events[i].data.ptr;
 			if (events[i].events & ~(EPOLLIN | EPOLLOUT)) {
@@ -931,9 +954,6 @@ static void grab_epoll_events(struct thread *t)
 			}
 		}
 	}
-
-	if (timerfd != -1)
-		clock_service(t, timerfd);
 }
 
 static void *loop_forever(void *ptr)
