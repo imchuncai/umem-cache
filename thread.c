@@ -370,7 +370,6 @@ static void conn_return_kv(struct thread *t, struct conn *conn)
 static void conn_lock_key(struct thread *t, struct conn *conn)
 {
 	hash_add(&t->hash_table, conn->key, &t->memory);
-	// Note: conn->interest might be used as a list node before
 	list_head_init(&conn->interest);
 }
 
@@ -400,21 +399,42 @@ static void cancel_clock(struct conn *conn)
 	}
 }
 
+static void __change_to_get_out_hit(struct conn *conn)
+{
+	conn->state = CONN_STATE_GET_OUT_HIT;
+	conn->unio = GET_RES_SIZE + conn_kv(conn)->val_size;
+	conn->size = htole64(conn_kv(conn)->val_size);
+	conn->miss = false;
+}
+
+static void conn_unlock_key_for_success(struct thread *t, struct conn *conn)
+{
+	cancel_clock(conn);
+	kv_enable(t, conn);
+	struct kv *kv = conn_kv(conn);
+
+	struct conn *curr;
+	list_for_each_entry(curr, &conn->interest, interest) {
+		conn_borrow_kv(t, curr, kv);
+		__change_to_get_out_hit(curr);
+		epoll_mod(t->epfd, curr->fd, (uint64_t)curr);
+	}
+
+	conn_return_kv(t, conn);
+
+	uint64_t page = hash_resize_page(&t->hash_table);
+	if (page > 0) {
+		void *new = memory_malloc_advance(t, page);
+		if (new)
+			hash_resize(&t->hash_table, page, new);
+	}
+}
+
 static void __change_to_get_out_miss(struct conn *conn)
 {
 	conn->state = CONN_STATE_GET_OUT_MISS;
 	conn->unio = GET_RES_SIZE;
 	conn->miss = true;
-}
-
-static void epfd_weak_up_conn(struct thread *t, struct conn *conn)
-{
-	struct epoll_event event;
-	event.events = EPOLLIN | EPOLLOUT | EPOLLET;
-	event.data.ptr = conn;
-	int ret __attribute__((unused));
-	ret = epoll_ctl(t->epfd, EPOLL_CTL_MOD, conn->fd, &event);
-	assert(ret == 0);
 }
 
 static void conn_unlock_key_for_failure(struct thread *t, struct conn *conn)
@@ -434,9 +454,8 @@ static void conn_unlock_key_for_failure(struct thread *t, struct conn *conn)
 	first->hash_node = conn->hash_node;
 	hlist_node_fix(&first->hash_node);
 	__call_clock(t, first);
-	// Note: don't call change_to_get_out_miss(), we should not trust client 
 	__change_to_get_out_miss(first);
-	epfd_weak_up_conn(t, first);
+	epoll_mod(t->epfd, first->fd, (uint64_t)first);
 }
 
 /**
@@ -650,10 +669,7 @@ static void state_get_out_hit(struct thread *t, struct conn *conn)
 
 static void change_to_get_out_hit(struct thread *t, struct conn *conn)
 {
-	conn->state = CONN_STATE_GET_OUT_HIT;
-	conn->unio = GET_RES_SIZE + conn_kv(conn)->val_size;
-	conn->size = htole64(conn_kv(conn)->val_size);
-	conn->miss = false;
+	__change_to_get_out_hit(conn);
 	state_get_out_hit(t, conn);
 }
 
@@ -758,29 +774,6 @@ static void state_in_cmd(struct thread *t, struct conn *conn)
 	uint64_t readed = CMD_SIZE_MAX - conn->unio;
 	if (conn_read(t, conn, conn->key - 1 + readed) && cmd_full_readed(conn))
 		cmd_run(t, conn);
-}
-
-static void conn_unlock_key_for_success(struct thread *t, struct conn *conn)
-{
-	cancel_clock(conn);
-	kv_enable(t, conn);
-	struct kv *kv = conn_kv(conn);
-
-	struct conn *curr, *temp;
-	list_for_each_entry_safe(curr, temp, &conn->interest, interest) {
-		list_del(&curr->interest);
-		conn_borrow_kv(t, curr, kv);
-		change_to_get_out_hit(t, curr);
-	}
-
-	conn_return_kv(t, conn);
-
-	uint64_t page = hash_resize_page(&t->hash_table);
-	if (page > 0) {
-		void *new = memory_malloc_advance(t, page);
-		if (new)
-			hash_resize(&t->hash_table, page, new);
-	}
 }
 
 static void state_set_in_value(struct thread *t, struct conn *conn)
@@ -899,7 +892,7 @@ static void thread_accept(struct thread *t, int fd)
 {
 	struct conn *conn = conn_malloc(t, fd);
 	if (conn)
-		epfd_weak_up_conn(t, conn);
+		epoll_mod(t->epfd, fd, (uint64_t)conn);
 	else
 		close(fd);
 }

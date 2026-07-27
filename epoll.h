@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #ifndef __UMEM_CACHE_EPOLL_H
 #define __UMEM_CACHE_EPOLL_H
@@ -36,6 +36,17 @@ static inline void epoll_del(int epfd, int fd)
 {
 	int ret __attribute__((unused));
 	ret = epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
+	assert(ret == 0);
+}
+
+static inline void epoll_mod(int epfd, int fd, uint64_t u64)
+{
+	struct epoll_event event;
+	event.data.u64 = u64;
+	event.events = EPOLLIN | EPOLLOUT | EPOLLET;
+
+	int ret __attribute__((unused));
+	ret = epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &event);
 	assert(ret == 0);
 }
 
