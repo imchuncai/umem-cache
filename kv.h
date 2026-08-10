@@ -16,15 +16,10 @@ struct concat_val {
 /* memory migration requires this member shows first */
 static_assert(offsetof(struct concat_val, soo_ptr) == 0);
 
-struct kv_borrower {
-	struct hlist_node kv_ref_node;
-	struct kv *kv;
-};
-
 /**
  * kv -
  * @soo: it has a trick involved, see kv_malloc() and kv_is_concat()
- * @borrower_list: the list of kv_borrower
+ * @borrower_list: the list of kv borrower
  * @lru: kv is on lru and is ready to serve command GET if enabled
  * @val_size: value size
  * @hash_node: resides in a hash_table if enabled
@@ -58,10 +53,7 @@ static_assert(offsetof(struct kv, soo) == 0);
 #define KV_SIZE(kv)	(sizeof(struct kv) + KV_KEY_SIZE(kv) + (kv)->val_size)
 
 void kv_init(struct kv *kv, const unsigned char *key, uint64_t val_size);
-void kv_borrow(struct kv *kv, struct kv_borrower *borrower);
-void kv_return(struct kv_borrower *borrower);
 bool kv_is_concat(struct kv *kv);
-void kv_borrower_init(struct kv_borrower *borrower);
 bool kv_no_borrower(struct kv *kv);
 int kv_val_to_iovec(struct kv *kv, uint64_t i, struct iovec *iov);
 int kv_copy_val(struct kv *kv, unsigned char *buffer, uint64_t n);

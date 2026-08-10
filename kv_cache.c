@@ -3,6 +3,7 @@
 
 #include <string.h>
 #include "kv_cache.h"
+#include "conn.h"
 
 struct slab_obj {
 	uint64_t read_only;
@@ -118,9 +119,8 @@ static void migrate(void *obj_from, struct slab_obj_offset soo_to, uint16_t size
 
 		struct hlist_node *curr;
 		hlist_for_each(curr, &to->borrower_list) {
-			struct kv_borrower *borrower;
-			borrower = container_of(curr, struct kv_borrower, kv_ref_node);
-			borrower->kv = to;
+			struct conn *conn = container_of(curr, struct conn, kv_borrower);
+			conn->kv = to;
 		}
 	}
 }

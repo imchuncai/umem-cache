@@ -12,18 +12,6 @@ void kv_init(struct kv *kv, const unsigned char *key, uint64_t val_size)
 	memcpy(KV_KEY(kv), key, KEY_SIZE(key));
 }
 
-void kv_borrow(struct kv *kv, struct kv_borrower *borrower)
-{
-	hlist_add(&kv->borrower_list, &borrower->kv_ref_node);
-	borrower->kv = kv;
-}
-
-void kv_return(struct kv_borrower *borrower)
-{
-	hlist_del(&borrower->kv_ref_node);
-	borrower->kv = NULL;
-}
-
 /**
  * kv_is_concat - Check if @kv is concat
  * 
@@ -40,11 +28,6 @@ bool kv_is_concat(struct kv *kv)
 bool kv_no_borrower(struct kv *kv)
 {
 	return hlist_empty(&kv->borrower_list);
-}
-
-void kv_borrower_init(struct kv_borrower *borrower)
-{
-	borrower->kv = NULL;
 }
 
 /**

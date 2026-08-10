@@ -26,7 +26,7 @@ enum conn_state {
 	CONN_STATE_OUT_SUCCESS		= (2 << 3) + EPOLLOUT,
 	CONN_STATE_GET_OUT_HIT		= (3 << 3) + EPOLLOUT,
 
-	CONN_STATE_FREE			= (4 << 3) + EPOLLIN,
+	CONN_STATE_FREE			= (4 << 3) + 0,
 	/* Note: following states holds a kv lock */
 
 	CONN_STATE_GET_OUT_MISS		= (5 << 3) + EPOLLOUT,
@@ -56,11 +56,17 @@ struct conn {
 			int fd;
 		};
 	};
-	struct kv_borrower kv_borrower;
+
+	struct hlist_node kv_borrower;
+	struct kv *kv;
+
 	struct hlist_node clock;
 	struct list_head interest;
 	uint64_t unio;
-	struct hlist_node hash_node;
+	union {
+		struct hlist_node hash_node;
+		struct hlist_node free_node;
+	};
 	unsigned char key[1 + CONFIG_KEY_SIZE_MAX];
 } __attribute__((aligned(8)));
 /* alignment is required by loop_forever */

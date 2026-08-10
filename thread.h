@@ -37,6 +37,7 @@ struct thread {
 #endif
 
 	struct memory memory;
+	struct hlist_head conn_free_list;
 	uint64_t s_lru_size;
 	struct list_head s_lru_head;
 	struct list_head m_lru_head;
