@@ -2,21 +2,92 @@
 .. Copyright (C) 2024-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 ==========
-UMEM-CACHE
+Umem-cache
 ==========
 
-UMEM-CACHE is a key/value memory cache work in user space, it is multi-threaded,
-lock-free, and has built-in anti-dogpiling, tls and raft cluster solution.
+Umem-cache is a user-space key-value cache. Its goal is to be the best in the world.
 
-In benchmark tests using Zipf distributed data, UMEM-CACHE significantly
-outperformed Memcached and Redis in both hit rate and hit throughput. Its
-advantages became even more pronounced after enabling tls. Don't be surprised
-if you see UMEM-CACHE performing 100% faster than REDIS in certain benchmarks.
+In benchmark tests with Zipf-based distribution and KV size within 1KB,
+Umem-cache achieved a 10% higher hit rate and 50% higher hit throughput than Memcached and Redis.
 
 Multilingual 多语言
 ==================
 
 - `简体中文 <https://github.com/imchuncai/umem-cache/tree/master/Documentation/translations/zh_CN/README.rst>`_
+
+Features
+========
+
+Strong Consistency
+------------------
+
+The cached data is fully synchronized with the backend database.
+
+In other words, you won't get staled data.
+
+Anti-dogpiling
+--------------
+
+We have built-in anti-dogpiling.
+
+Dogpiling is the effect you get when a hot key first coming into the cache, and
+everyone rushes to cache it, which puts pressure on the fallback database. The
+anti-dogpiling tries to mitigate this by only let one connection have the
+permission to do the cache work.
+
+Memory Fragmentation
+--------------------
+
+We don't have memory fragmentation issues.
+
+We compact the memory layout by moving the storage locations of key-value pairs.
+
+Strictly Control Memory Usage
+-----------------------------
+
+We fully respect user configurations. We have precise control over memory
+usage (including the memory footprint of hash tables), and increasing the
+number of key-value pairs does not lead to additional memory consumption, and
+the size of the hash table is dynamically adjusted based on the number of
+key-value pairs managed.
+
+Multi-threaded
+--------------
+
+We offer multi-threaded configurations to fully utilize the machine's performance.
+
+We will not create any threads other than the main thread and the worker threads
+specified in the configuration.
+
+Lock Free
+---------
+
+Our multi-threaded solution is lock-free, so there is no situation where
+performance will decrease as the number of threads increases.
+
+TLS
+---
+
+We offer an optional TLS configuration that uses mTLS authentication.
+
+Cluster
+-------
+
+We offer optional cluster configuration, which is implement under the guidance
+of the raft consensus algorithm, ensures consistency and availability.
+
+- WARN: ipv6 link-local address is not supported.
+- WARN: do not add servers that are already in use to the cluster.
+- WARN: do not restart nodes, instead, remove it from the cluster and then add it back.
+- WARN: domain name resolution is not supported.
+- NOTE: check our changes to raft at `raft-paper.rst <https://github.com/imchuncai/umem-cache/tree/master/Documentation/raft-paper.rst>`_ .
+- NOTE: every machine in the cluster should be built using the same THREAD_NR and MEM_LIMIT.
+
+ARBITRARY KEY AND VALUE
+-----------------------
+
+Keys and values are arbitrary byte arrays, except key is at most 255 bytes for
+singleton and at most 247 bytes for cluster.
 
 RUNNING REQUIREMENTS
 ====================
@@ -46,39 +117,7 @@ TESTS
 
 - functional tests: `umem-cache-client-Go <https://github.com/imchuncai/umem-cache-client-Go>`_
 - benchmark  tests: `umem-cache-benchmark <https://github.com/imchuncai/umem-cache-benchmark>`_
-- cluster benchmark tests: testing is scheduled for the end of 2026.
-
-FEATURES
-========
-
-ARBITRARY KEY AND VALUE
------------------------
-
-Keys and values are arbitrary byte arrays, except key is at most 255 bytes for
-singleton and at most 247 bytes for cluster.
-
-ANTI-DOGPILING
---------------
-
-We have built-in anti-dogpiling.
-
-Dogpiling is the effect you get when a hot key first coming into the cache, and
-everyone rushes to cache it, which puts pressure on the fallback database. The
-anti-dogpiling tries to mitigate this by only let one connection have the
-permission to do the cache work.
-
-CLUSTER SOLUTION
-----------------
-
-We have built-in cluster solution, which is implement under the guidance of the
-raft consensus algorithm, ensures consistency and availability.
-
-- WARN: ipv6 link-local address is not supported.
-- WARN: do not add servers that are already in use to the cluster.
-- WARN: do not restart nodes, instead, remove it from the cluster and then add it back.
-- WARN: domain name resolution is not supported.
-- NOTE: check our changes to raft at `raft-paper.rst <https://github.com/imchuncai/umem-cache/tree/master/Documentation/raft-paper.rst>`_ .
-- NOTE: every machine in the cluster should be built using the same THREAD_NR and MEM_LIMIT.
+- cluster benchmark tests: the plan has been postponed to 2027
 
 CLIENT PROTOCOL
 ===============

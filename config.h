@@ -9,6 +9,12 @@
 
 /***************************** CONFIGURABLE BEGIN *****************************/
 
+/**
+ * number of threads other than the main thread.
+ * 
+ * Note: if there are N available CPU threads, it is recommended to set this
+ * to N for singleton mode and to (N - 1) for cluster mode.
+ */
 #ifndef CONFIG_THREAD_NR
 #define CONFIG_THREAD_NR 4
 #endif

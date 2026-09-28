@@ -27,7 +27,7 @@ enum conn_state {
 	CONN_STATE_GET_OUT_HIT		= (3 << 3) + EPOLLOUT,
 
 	CONN_STATE_FREE			= (4 << 3) + 0,
-	/* Note: following states holds a kv lock */
+	/* Note: following states holds a key lock */
 
 	CONN_STATE_GET_OUT_MISS		= (5 << 3) + EPOLLOUT,
 	CONN_STATE_SET_IN_VALUE_SIZE	= (6 << 3) + EPOLLIN,
@@ -38,10 +38,12 @@ enum conn_state {
  * conn - Structure describes connection
  * @fd: connection bound socket file descriptor
  * @kv_borrower: borrows kv for operation
+ * @kv: the borrowed kv
  * @clock: resides in (struct thread->clock_probation) when clock is called and
  * may move to (struct thread->clock_death) later
  * @unio: number of bytes not read() or write()
  * @hash_node: resides in (struct thread->hash_table) before malloc kv
+ * @free_node: resides in (struct thread->conn_free_list) wait for free
  * @key: key received from client
  */
 struct conn {

@@ -136,12 +136,13 @@ static void evacuate(struct hash_table *ht, uint64_t i, struct memory *m)
 		ht->migrated++;
 		uint64_t max = ht->migrated + 1024;
 		if (max > ht->old_mask)
-			max = ht->old_mask + 1;
+			max = ht->old_mask;
 
-		while (ht->migrated < max && bucket_evacuated(ht, ht->migrated))
+		while (ht->migrated <= max && bucket_evacuated(ht, ht->migrated))
 			ht->migrated++;
 
 		if (ht->migrated > ht->old_mask) {
+			assert(ht->migrated == ht->old_mask + 1);
 			memory_free(m, ht->old_buckets, MASK_TO_PAGE(ht->old_mask));
 			ht->old_buckets = NULL;
 		}
@@ -190,6 +191,7 @@ void hash_add(struct hash_table *ht, const unsigned char *key, struct memory *m)
 {
 	ht->n++;
 
+	/* make sure not add to the old bucket */
 	uint64_t hkey = key_hash(key);
 	if (under_migrating(ht))
 		evacuate(ht, hkey & ht->old_mask, m);
@@ -206,12 +208,6 @@ static bool should_shrink(const struct hash_table *ht)
 	return ht->mask > MIN_MASK && ht->n < (ht->mask << 1);
 }
 
-/**
- * shrink_required_page -
- * 
- * Note: we may only need a smaller page if we delete a lot of keys at once, but
- * this may never happen in production.
- */
 static uint64_t shrink_required_page(const struct hash_table *ht)
 {
 	return MASK_TO_PAGE(ht->mask) >> 1;

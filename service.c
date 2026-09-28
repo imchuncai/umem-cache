@@ -51,19 +51,14 @@ static bool service_conn_full_read_connect_in(struct service_conn *conn)
 	int fd = conn->fd;
 	unsigned char unread = conn->buffer[3];
 	assert(unread > 0);
-	ssize_t n = read(conn->fd, conn->buffer - 4 + (8 - unread), unread);
+	ssize_t n = read(conn->fd, conn->buffer + 4 - unread, unread);
 	conn->fd = fd;
-	if (n > 0) {
-		assert(unread >= n);
-		if (unread == n) {
-			return true;
-		} else {
-			conn->buffer[3] -= n;
-			return false;
-		}
-	}
+	if (unread == n)
+		return true;
 
-	if (n == 0 || errno != EWOULDBLOCK)
+	if (n > 0)
+		conn->buffer[3] -= n;
+	else if (n == 0 || errno != EWOULDBLOCK)
 		service_conn_free(conn);
 
 	return false;

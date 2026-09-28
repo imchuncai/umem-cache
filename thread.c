@@ -19,32 +19,33 @@ static struct thread threads[CONFIG_THREAD_NR];
 #define SIZE_TO_IDX_IDX(size)	(((size) + 7 - KV_CACHE_OBJ_SIZE_MIN) >> 3)
 #define KV_CACHE_IDX_LEN	(SIZE_TO_IDX_IDX(KV_CACHE_OBJ_SIZE_MAX) + 1)
 static const unsigned char kv_cache_idx[KV_CACHE_IDX_LEN] = {
-	 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 
-	18, 19, 20, 21, 22, 23, 24, 25, 25, 26, 26, 27, 27, 28, 28, 29, 29, 30, 
-	30, 30, 31, 31, 31, 32, 32, 33, 33, 34, 34, 35, 35, 35, 36, 36, 37, 37, 
-	37, 38, 38, 38, 38, 39, 39, 39, 39, 40, 40, 40, 40, 41, 41, 41, 41, 41, 
-	42, 42, 42, 42, 42, 43, 43, 43, 44, 44, 44, 44, 45, 45, 45, 45, 46, 46, 
-	46, 46, 47, 47, 47, 47, 48, 48, 48, 48, 48, 49, 49, 49, 49, 49, 50, 50, 
-	50, 50, 50, 50, 51, 51, 51, 51, 51, 51, 51, 52, 52, 52, 52, 52, 52, 52, 
-	52, 53, 53, 53, 53, 53, 53, 53, 53, 54, 54, 54, 54, 54, 55, 55, 55, 55, 
-	55, 56, 56, 56, 56, 56, 57, 57, 57, 57, 57, 57, 58, 58, 58, 58, 58, 58, 
-	59, 59, 59, 59, 59, 59, 59, 60, 60, 60, 60, 60, 60, 60, 60, 61, 61, 61, 
-	61, 61, 61, 61, 61, 62, 62, 62, 62, 62, 62, 62, 62, 62, 63, 63, 63, 63, 
-	63, 63, 63, 63, 63, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 65, 65, 
-	65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 66, 66, 66, 66, 66, 66, 66, 66, 
-	66, 66, 66, 66, 66, 67, 67, 67, 67, 67, 67, 67, 67, 67, 67, 67, 67, 67, 
-	67, 67, 67, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 
-	68, 68, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 
-	69, 69, 69, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 
-	70, 70, 70, 70, 70, 70, 70, 70, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 
-	71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 72, 72, 
-	72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 
-	72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 73, 73, 73, 73, 73, 73, 73, 
-	73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 
-	73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 74, 74, 74, 74, 74, 74, 
-	74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 
-	74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 
-	74, 74, 74, 74, };
+	 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17,
+	18, 19, 20, 21, 22, 23, 24, 25, 25, 26, 26, 27, 27, 28, 28, 29, 29, 30,
+	30, 30, 31, 31, 31, 32, 32, 33, 33, 34, 34, 35, 35, 35, 36, 36, 37, 37,
+	37, 38, 38, 38, 38, 39, 39, 39, 39, 40, 40, 40, 40, 41, 41, 41, 41, 41,
+	42, 42, 42, 42, 42, 43, 43, 43, 44, 44, 44, 44, 45, 45, 45, 45, 46, 46,
+	46, 46, 47, 47, 47, 47, 48, 48, 48, 48, 48, 49, 49, 49, 49, 49, 50, 50,
+	50, 50, 50, 50, 51, 51, 51, 51, 51, 51, 51, 52, 52, 52, 52, 52, 52, 52,
+	52, 53, 53, 53, 53, 53, 53, 53, 53, 54, 54, 54, 54, 54, 55, 55, 55, 55,
+	55, 56, 56, 56, 56, 56, 57, 57, 57, 57, 57, 57, 58, 58, 58, 58, 58, 58,
+	59, 59, 59, 59, 59, 59, 59, 60, 60, 60, 60, 60, 60, 60, 60, 61, 61, 61,
+	61, 61, 61, 61, 61, 62, 62, 62, 62, 62, 62, 62, 62, 62, 63, 63, 63, 63,
+	63, 63, 63, 63, 63, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 65, 65,
+	65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 66, 66, 66, 66, 66, 66, 66, 66,
+	66, 66, 66, 66, 66, 67, 67, 67, 67, 67, 67, 67, 67, 67, 67, 67, 67, 67,
+	67, 67, 67, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68, 68,
+	68, 68, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69,
+	69, 69, 69, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70,
+	70, 70, 70, 70, 70, 70, 70, 70, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71,
+	71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 71, 72, 72,
+	72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72,
+	72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 72, 73, 73, 73, 73, 73, 73, 73,
+	73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73,
+	73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 73, 74, 74, 74, 74, 74, 74,
+	74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74,
+	74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74, 74,
+	74, 74, 74, 74
+};
 
 #ifdef DEBUG
 static void kv_cache_idx_generate_print()
@@ -52,7 +53,7 @@ static void kv_cache_idx_generate_print()
 	struct kv_cache cache;
 	kv_cache_init(&cache, KV_CACHE_OBJ_SIZE_MIN);
 	int i = 0;
-	printf("{\n\t 0, ");
+	printf("{\n\t 0");
 	for (unsigned int size = KV_CACHE_OBJ_SIZE_MIN + 8;
 				size <= KV_CACHE_OBJ_SIZE_MAX; size += 8) {
 		if (cache.obj_size < size) {
@@ -63,11 +64,11 @@ static void kv_cache_idx_generate_print()
 		}
 
 		if (SIZE_TO_IDX_IDX(size) % 18 == 0)
-			printf("\n\t%2d, ", i);
+			printf(",\n\t%2d", i);
 		else
-			printf("%2d, ", i);
+			printf(", %2d", i);
 	}
-	printf("}\n\n");
+	printf("\n}\n\n");
 }
 #endif
 
@@ -561,17 +562,17 @@ static void state_get_out_hit(struct thread *t, struct conn *conn)
 
 	uint64_t written = GET_RES_SIZE + conn->kv->val_size - conn->unio;
 	struct iovec iov[3];
-	uint64_t iov_len;
+	uint64_t iovlen;
 	if (written < GET_RES_SIZE) {
 		iov[0].iov_base = conn->buffer + written;
 		iov[0].iov_len = GET_RES_SIZE - written;
-		iov_len = 1 + kv_val_to_iovec(conn->kv, 0, iov + 1);
+		iovlen = 1 + kv_val_to_iovec(conn->kv, 0, iov + 1);
 	} else {
 		uint64_t i = conn->kv->val_size - conn->unio;
-		iov_len = kv_val_to_iovec(conn->kv, i, iov);
+		iovlen = kv_val_to_iovec(conn->kv, i, iov);
 	}
 
-	if (conn_full_write_msg(t, conn, iov, iov_len)) {
+	if (conn_full_write_msg(t, conn, iov, iovlen)) {
 		conn_return_kv(t, conn);
 		change_to_in_cmd(conn);
 	}
@@ -701,7 +702,7 @@ static void conn_unlock_key_for_failure(struct thread *t, struct conn *conn)
 	change_to_get_out_miss(t, first);
 }
 
-static bool conn_borrowed_key(struct conn *conn)
+static bool conn_borrowed_kv(struct conn *conn)
 {
 	return conn->state == CONN_STATE_GET_OUT_HIT ||
 	       conn->state == CONN_STATE_SET_IN_VALUE;
@@ -716,7 +717,7 @@ static void change_to_free(struct thread *t, struct conn *conn)
 {
 	debug_printf("free conn:\n");
 
-	if (conn_borrowed_key(conn))
+	if (conn_borrowed_kv(conn))
 		conn_return_kv(t, conn);
 
 	if (conn_with_key_locked(conn))
@@ -755,15 +756,15 @@ static void state_set_in_value(struct thread *t, struct conn *conn)
 	
 	uint64_t readed = conn->kv->val_size + CMD_SIZE_MAX - conn->unio;
 	struct iovec iov[2 + 2];
-	int iov_len = kv_val_to_iovec(conn->kv, readed, iov);
+	int n = kv_val_to_iovec(conn->kv, readed, iov);
 
 	unsigned char cmd;
-	iov[iov_len].iov_base = &cmd;
-	iov[iov_len].iov_len = 1;
-	iov[iov_len + 1].iov_base = conn->key;
-	iov[iov_len + 1].iov_len = 1 + CONFIG_KEY_SIZE_MAX;
+	iov[n].iov_base = &cmd;
+	iov[n].iov_len = 1;
+	iov[n + 1].iov_base = conn->key;
+	iov[n + 1].iov_len = 1 + CONFIG_KEY_SIZE_MAX;
 
-	if (conn_read_msg(t, conn, iov, iov_len + 2) && conn->unio <= CMD_SIZE_MAX) {
+	if (conn_read_msg(t, conn, iov, n + 2) && conn->unio <= CMD_SIZE_MAX) {
 		conn_unlock_key_for_success(t, conn);
 
 		conn->state = CONN_STATE_IN_CMD;
@@ -961,6 +962,10 @@ static bool thread_create_clock_service(struct thread *t)
 
 static bool thread_init(struct thread *t)
 {
+	t->epfd = epoll_create1(0);
+	if (t->epfd == -1)
+		return false;
+
 #ifdef CONFIG_RAFT
 	t->__warmed_up = false;
 #endif
@@ -971,9 +976,6 @@ static bool thread_init(struct thread *t)
 	list_head_init(&t->m_lru_head);
 	hlist_head_init(&t->clock_probation);
 	hlist_head_init(&t->clock_death);
-	t->epfd = epoll_create1(0);
-	if (t->epfd == -1)
-		return false;
 	kv_cache_list_init(t->kv_cache_list);
 	fixed_mem_cache_init(&t->conn_cache, t->__conns, sizeof(struct conn),
 							THREAD_MAX_CONN);
