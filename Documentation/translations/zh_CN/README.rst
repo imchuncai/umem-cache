@@ -7,8 +7,8 @@ Umem-cache
 
 Umem-cache是一个用户空间键值对缓存。它的目标是做到全世界最好。
 
-在基于Zipf分布且键值对大小在1KB以内的基准测试中，Umem-cache的命中率比Memcached和Redis高
-出10%，命中吞吐量高出50%。
+在基于Zipf分布且键值对大小在1KB以内的基准测试中，与Memcached和Redis相比，
+Umem-cache的命中率高出10%，命中吞吐量高出55%，同时将P90延迟降低了50%以上，P99.9延迟降低了40%以上。
 
 Multilingual 多语言
 ==================

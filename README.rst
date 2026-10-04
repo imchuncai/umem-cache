@@ -8,7 +8,9 @@ Umem-cache
 Umem-cache is a user-space key-value cache. Its goal is to be the best in the world.
 
 In benchmark tests with Zipf-based distribution and KV size within 1KB,
-Umem-cache achieved a 10% higher hit rate and 50% higher hit throughput than Memcached and Redis.
+Umem-cache achieved a 10% higher hit rate and 55% higher hit throughput,
+while reducing P90 latency by over 50% and P99.9 latency by over 40%
+compared to Memcached and Redis.
 
 Multilingual 多语言
 ==================
@@ -83,13 +85,13 @@ of the raft consensus algorithm, ensures consistency and availability.
 - NOTE: check our changes to raft at `raft-paper.rst <https://github.com/imchuncai/umem-cache/tree/master/Documentation/raft-paper.rst>`_ .
 - NOTE: every machine in the cluster should be built using the same THREAD_NR and MEM_LIMIT.
 
-ARBITRARY KEY AND VALUE
+Arbitrary Key And Value
 -----------------------
 
 Keys and values are arbitrary byte arrays, except key is at most 255 bytes for
 singleton and at most 247 bytes for cluster.
 
-RUNNING REQUIREMENTS
+Running Requirements
 ====================
 
 - 64bit linux
@@ -98,7 +100,7 @@ RUNNING REQUIREMENTS
 - linux 4.17 or later is required for tls (not verified)
 - require ktls enabled for tls
 
-BUILD
+Build
 =====
 
 - GCC is required
@@ -112,14 +114,14 @@ BUILD
 	make check RAFT=0 TLS=0
 	./umem-cache 10047
 
-TESTS
+Tests
 =====
 
 - functional tests: `umem-cache-client-Go <https://github.com/imchuncai/umem-cache-client-Go>`_
 - benchmark  tests: `umem-cache-benchmark <https://github.com/imchuncai/umem-cache-benchmark>`_
 - cluster benchmark tests: the plan has been postponed to 2027
 
-CLIENT PROTOCOL
+Client Protocol
 ===============
 
 - Unless otherwise specified, this protocol is little-endian.
@@ -135,7 +137,7 @@ CONNECT
 
 	NOTE: [error] is always 0
 
-CLIENT PROTOCOL (BUILD WITH RAFT)
+Client Protocol (Build With Raft)
 =================================
 
 - Unless otherwise specified, this protocol is little-endian
@@ -250,7 +252,7 @@ AUTHORITY
 	[command] [=APPROVAL=] [request-count] [=APPROVAL=]
 	[   1   ]              [      1      ]
 
-CACHE PROTOCOL
+Cache Protocol
 ==============
 
 Use the following protocol to interact with the thread after connecting to the target thread.
@@ -285,7 +287,7 @@ CMD-DEL
 
 	Note: [error] is always 0
 
-KEY DISPATCH
+Key Dispatch
 ============
 
 We use client side hash to dispatch keys to threads.
@@ -294,7 +296,7 @@ Client should use MurmurHash3_x64_128 with seed 74 as hash method, and use the
 first 64 bits of the hash value as a little-endian integer to dispatch keys to
 threads. The dispatch method is `Lemire's reduction method <https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction>`_ .
 
-CLUSTER MEMBER DISPATCH
+Cluster Member Dispatch
 -----------------------
 
 Keys in the cluster differ from those in the singleton, they have an 8-byte
