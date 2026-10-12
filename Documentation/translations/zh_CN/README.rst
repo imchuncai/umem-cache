@@ -114,10 +114,11 @@ CONNECT
 -------
 ::
 
-	[        OUT         ] [ IN  ]
-	[reserved] [thread-id] [error]
-	[   4    ] [    4    ] [  1  ]
+	[             OUT              ] [ IN  ]
+	[command] [reserved] [thread-id] [error]
+	[   1   ] [   3    ] [    4    ] [  1  ]
 
+	注意：[command]必须设为0
 	注意：[error]总是0
 
 客户端协议 (编译参数包含RAFT)
@@ -128,6 +129,16 @@ CONNECT
 - 如果协议标签包含(ADMIN)，客户端应使用管理员端口（运行端口号 + 1）
 - command编码请查看 `raft_proto.h <https://github.com/imchuncai/umem-cache/tree/master/raft_proto.h>`_
 - 缓存工作流请查看 `cluster_cache_flow.txt <https://github.com/imchuncai/umem-cache/tree/master/Documentation/translations/zh_CN/cluster_cache_flow.txt>`_
+
+CONNECT
+-------
+::
+
+	[             OUT              ] [ IN  ]
+	[command] [reserved] [thread-id] [error]
+	[   1   ] [   3    ] [    4    ] [  1  ]
+
+	注意：[error]总是0
 
 =MACHINE=
 ---------
@@ -207,16 +218,6 @@ CLUSTER
 	[   1   ] [ 1  ] [   7    ] [      8      ] [   8   ] [=MACHINE= * n]
 
 	注意：集群类型请查看 `log.h <https://github.com/imchuncai/umem-cache/tree/master/log.h>`_
-
-CONNECT
--------
-::
-
-	[             OUT              ] [ IN  ]
-	[command] [reserved] [thread-id] [error]
-	[   1   ] [   3    ] [    4    ] [  1  ]
-
-	注意：[error]总是0
 
 =APPROVAL=
 ----------
