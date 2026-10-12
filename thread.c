@@ -152,7 +152,7 @@ static void kv_enable(struct thread *t, struct conn *conn)
 	struct kv *kv = conn->kv;
 	kv->hash_node = conn->hash_node;
 	hlist_node_fix(&kv->hash_node);
-	
+
 	if (hash_ghost(&t->hash_table, KV_KEY(kv))) {
 		kv->on_s_lru = 0;
 		list_lru_add(&t->m_lru_head, &kv->lru);
@@ -753,7 +753,7 @@ static void conn_unlock_key_for_success(struct thread *t, struct conn *conn)
 static void state_set_in_value(struct thread *t, struct conn *conn)
 {
 	debug_printf("CONN_STATE_SET_IN_VALUE:\n");
-	
+
 	uint64_t readed = conn->kv->val_size + CMD_SIZE_MAX - conn->unio;
 	struct iovec iov[2 + 2];
 	int n = kv_val_to_iovec(conn->kv, readed, iov);
@@ -803,6 +803,7 @@ static void state_set_in_value_size(struct thread *t, struct conn *conn)
 	uint64_t buffer_n = SET_EXTRA_BUFFER - conn->unio;
 	uint64_t n = kv_copy_val(kv, buffer, buffer_n);
 	if (n < val_size) {
+		assert(n == buffer_n);
 		conn->state = CONN_STATE_SET_IN_VALUE;
 		conn->unio = val_size + CMD_SIZE_MAX - n;
 		if (buffer_n == SET_EXTRA_BUFFER) {
@@ -811,6 +812,7 @@ static void state_set_in_value_size(struct thread *t, struct conn *conn)
 		return;
 	}
 
+	assert(n == val_size);
 	conn_unlock_key_for_success(t, conn);
 
 	conn->state = CONN_STATE_IN_CMD;
@@ -952,7 +954,7 @@ static bool thread_create_clock_service(struct thread *t)
 		close(timerfd);
 		return false;
 	}
-	
+
 	if (epoll_add_in(t->epfd, timerfd, ((uint64_t)timerfd << 32) | 2))
 		return true;
 

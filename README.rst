@@ -131,10 +131,11 @@ CONNECT
 -------
 ::
 
-	[        OUT         ] [ IN  ]
-	[reserved] [thread-id] [error]
-	[   4    ] [    4    ] [  1  ]
+	[             OUT              ] [ IN  ]
+	[command] [reserved] [thread-id] [error]
+	[   1   ] [   3    ] [    4    ] [  1  ]
 
+	NOTE: [command] must set to 0
 	NOTE: [error] is always 0
 
 Client Protocol (Build With Raft)
@@ -145,6 +146,16 @@ Client Protocol (Build With Raft)
 - Client should use admin port(running_port + 1), if the proto is tagged (ADMIN)
 - Check `raft_proto.h <https://github.com/imchuncai/umem-cache/tree/master/raft_proto.h>`_ for command code
 - Check `cluster_cache_flow.txt <https://github.com/imchuncai/umem-cache/tree/master/Documentation/cluster_cache_flow.txt>`_ for cache flow
+
+CONNECT
+-------
+::
+
+	[             OUT              ] [ IN  ]
+	[command] [reserved] [thread-id] [error]
+	[   1   ] [   3    ] [    4    ] [  1  ]
+
+	NOTE: [error] is always 0
 
 =MACHINE=
 ---------
@@ -224,16 +235,6 @@ CLUSTER
 	[   1   ] [ 1  ] [   7    ] [      8      ] [   8   ] [=MACHINE= * n]
 
 	NOTE: check `log.h <https://github.com/imchuncai/umem-cache/tree/master/log.h>`_ for type
-
-CONNECT
--------
-::
-
-	[             OUT              ] [ IN  ]
-	[command] [reserved] [thread-id] [error]
-	[   1   ] [   3    ] [    4    ] [  1  ]
-
-	NOTE: [error] is always 0
 
 =APPROVAL=
 ----------

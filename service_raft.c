@@ -697,7 +697,7 @@ static bool member_commited_log(struct server *s, struct member *m)
 		}
 		if (leader_replace_log(s, new))
 			return true;
-		
+
 		free(new);
 	}
 	return false;
@@ -1073,7 +1073,7 @@ static void state_in_cmd(struct server *s, struct raft_conn *conn)
 		return;
 
 	enum raft_cmd cmd = conn->buffer[0];
-	if (!conn->admin && cmd < RAFT_CMD_ADMIN_DIVIDER) {
+	if (!conn->admin && cmd > RAFT_CMD_ADMIN_DIVIDER) {
 		raft_conn_free(conn);
 		return;
 	}
@@ -1081,6 +1081,31 @@ static void state_in_cmd(struct server *s, struct raft_conn *conn)
 	readed = RAFT_CONN_BUFFER_SIZE - conn->unio;
 
 	switch (cmd) {
+	case RAFT_CMD_CONNECT:
+		debug_printf("RAFT_CMD_CONNECT:\n");
+		if (readed == sizeof(struct connect_req))
+			state_connect_in(s, conn);
+
+		break;
+	case RAFT_CMD_LEADER:
+		assert(readed == 1);
+		debug_printf("RAFT_CMD_LEADER:\n");
+		change_to_leader_out(s, conn);
+		break;
+	case RAFT_CMD_CLUSTER:
+		assert(readed == 1);
+		debug_printf("RAFT_CMD_CLUSTER:\n");
+		change_to_cluster_out(s, conn);
+		break;
+	case RAFT_CMD_AUTHORITY:
+		assert(readed == 1);
+		debug_printf("RAFT_CMD_AUTHORITY:\n");
+		list_add(&s->authority, &conn->authority);
+		conn->authority_pending_nr = 0;
+		conn->authority_processing_nr = 0;
+		conn->authority_succeed_nr = 0;
+		change_to_authority_out(s, conn);
+		break;
 	case RAFT_CMD_REQUEST_VOTE:
 		debug_printf("RAFT_CMD_REQUEST_VOTE:\n");
 		if (readed == sizeof(struct request_vote_req))
@@ -1110,31 +1135,6 @@ static void state_in_cmd(struct server *s, struct raft_conn *conn)
 		if (readed == RAFT_CONN_BUFFER_SIZE)
 			change_to_change_cluster_in(s, conn);
 
-		break;
-	case RAFT_CMD_LEADER:
-		assert(readed == 1);
-		debug_printf("RAFT_CMD_LEADER:\n");
-		change_to_leader_out(s, conn);
-		break;
-	case RAFT_CMD_CLUSTER:
-		assert(readed == 1);
-		debug_printf("RAFT_CMD_CLUSTER:\n");
-		change_to_cluster_out(s, conn);
-		break;
-	case RAFT_CMD_CONNECT:
-		debug_printf("RAFT_CMD_CONNECT:\n");
-		if (readed == sizeof(struct connect_req))
-			state_connect_in(s, conn);
-
-		break;
-	case RAFT_CMD_AUTHORITY:
-		assert(readed == 1);
-		debug_printf("RAFT_CMD_AUTHORITY:\n");
-		list_add(&s->authority, &conn->authority);
-		conn->authority_pending_nr = 0;
-		conn->authority_processing_nr = 0;
-		conn->authority_succeed_nr = 0;
-		change_to_authority_out(s, conn);
 		break;
 	default:
 		debug_printf("unrecognized command.........................\n");

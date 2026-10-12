@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2025, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
+// Copyright (C) 2025-2026, Shu De Zheng <imchuncai@gmail.com>. All Rights Reserved.
 
 #ifndef __UMEM_CACHE_RAFT_PROTO_H
 #define __UMEM_CACHE_RAFT_PROTO_H
@@ -7,22 +7,23 @@
 #include "log.h"
 
 enum raft_cmd {
+	RAFT_CMD_CONNECT,
+	RAFT_CMD_LEADER,
+	RAFT_CMD_CLUSTER,
+	RAFT_CMD_AUTHORITY,
+
+	RAFT_CMD_ADMIN_DIVIDER,
+
 	RAFT_CMD_REQUEST_VOTE,
 	RAFT_CMD_APPEND_LOG,
 	RAFT_CMD_HEARTBEAT,
 
 	RAFT_CMD_INIT_CLUSTER,
 	RAFT_CMD_CHANGE_CLUSTER,
-
-	RAFT_CMD_ADMIN_DIVIDER,
-
-	RAFT_CMD_LEADER,
-	RAFT_CMD_CLUSTER,
-	RAFT_CMD_CONNECT,
-	RAFT_CMD_AUTHORITY,
 } __attribute__((__packed__));
 
 static_assert(sizeof(enum raft_cmd) == 1);
+static_assert(RAFT_CMD_CONNECT == 0);
 
 struct request_vote_req {
 	enum raft_cmd cmd;

@@ -69,15 +69,15 @@ int kv_copy_val(struct kv *kv, unsigned char *buffer, uint64_t n)
 		n = kv->val_size;
 
 	struct iovec iov[2];
-	int iov_len = kv_val_to_iovec(kv, 0, iov);
-	uint64_t k = 0;
-	for (int i = 0; i < iov_len; i++) {
-		if (k + iov[i].iov_len > n) {
-			memcpy(iov[i].iov_base, buffer + k, n - k);
+	int iovlen = kv_val_to_iovec(kv, 0, iov);
+	uint64_t copied = 0;
+	for (int i = 0; i < iovlen; i++) {
+		if (copied + iov[i].iov_len > n) {
+			memcpy(iov[i].iov_base, buffer + copied, n - copied);
 			break;
 		}
-		memcpy(iov[i].iov_base, buffer + k, iov[i].iov_len);
-		k += iov[i].iov_len;
+		memcpy(iov[i].iov_base, buffer + copied, iov[i].iov_len);
+		copied += iov[i].iov_len;
 	}
 	return n;
 }

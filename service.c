@@ -11,7 +11,8 @@
 
 struct service_conn {
 	int fd;
-	unsigned char buffer[4];
+	int unread;
+	unsigned char buffer[8];
 
 #ifdef CONFIG_KERNEL_TLS
 	struct tls_session session;
@@ -24,7 +25,7 @@ static struct service_conn *service_conn_malloc(
 	struct service_conn *conn = malloc(sizeof(struct service_conn));
 	if (conn) {
 		conn->fd = fd;
-		conn->buffer[3] = 8;
+		conn->unread = 8;
 
 	#ifdef CONFIG_KERNEL_TLS
 		if (!tls_init_server(&conn->session, fd, peer)) {
@@ -48,16 +49,14 @@ static void service_conn_free(struct service_conn *conn)
 
 static bool service_conn_full_read_connect_in(struct service_conn *conn)
 {
-	int fd = conn->fd;
-	unsigned char unread = conn->buffer[3];
-	assert(unread > 0);
-	ssize_t n = read(conn->fd, conn->buffer + 4 - unread, unread);
-	conn->fd = fd;
-	if (unread == n)
+	assert(conn->unread > 0);
+	int readed = 8 - conn->unread;
+	ssize_t n = read(conn->fd, conn->buffer + readed, conn->unread);
+	if (conn->unread == n)
 		return true;
 
 	if (n > 0)
-		conn->buffer[3] -= n;
+		conn->unread -= n;
 	else if (n == 0 || errno != EWOULDBLOCK)
 		service_conn_free(conn);
 
@@ -78,7 +77,7 @@ static bool handshake(struct service_conn *conn)
 		conn->session.session = NULL;
 		return true;
 	}
-	
+
 	if (ret != GNUTLS_E_AGAIN)
 		service_conn_free(conn);
 
@@ -101,8 +100,9 @@ static void read_thread_info(struct service_conn *conn, int epfd)
 	if (!service_conn_full_read_connect_in(conn))
 		return;
 
-	uint32_t thread_id = le32toh(*(uint32_t *)conn->buffer);
-	if (thread_id >= CONFIG_THREAD_NR) {
+	unsigned char cmd = conn->buffer[0];
+	uint32_t thread_id = le32toh(*(uint32_t *)(conn->buffer + 4));
+	if (cmd > 0 || thread_id >= CONFIG_THREAD_NR) {
 		service_conn_free(conn);
 		return;
 	}
