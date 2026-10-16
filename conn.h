@@ -6,10 +6,12 @@
 
 #include <sys/epoll.h>
 #include "kv.h"
+#include "stats.h"
 
 enum cache_cmd {
 	CACHE_CMD_GET_OR_SET,
 	CACHE_CMD_DEL,
+	CACHE_CMD_STATS,
 } __attribute__((__packed__));
 
 static_assert(sizeof(enum cache_cmd) == 1);
@@ -25,13 +27,14 @@ enum conn_state {
 	CONN_STATE_GET_BLOCKED		= (1 << 3) + 0,
 	CONN_STATE_OUT_SUCCESS		= (2 << 3) + EPOLLOUT,
 	CONN_STATE_GET_OUT_HIT		= (3 << 3) + EPOLLOUT,
+	CONN_STATE_OUT_STATS		= (4 << 3) + EPOLLOUT,
 
-	CONN_STATE_FREE			= (4 << 3) + 0,
+	CONN_STATE_FREE			= (5 << 3) + 0,
 	/* Note: following states holds a key lock */
 
-	CONN_STATE_GET_OUT_MISS		= (5 << 3) + EPOLLOUT,
-	CONN_STATE_SET_IN_VALUE_SIZE	= (6 << 3) + EPOLLIN,
-	CONN_STATE_SET_IN_VALUE		= (7 << 3) + EPOLLIN,
+	CONN_STATE_GET_OUT_MISS		= (6 << 3) + EPOLLOUT,
+	CONN_STATE_SET_IN_VALUE_SIZE	= (7 << 3) + EPOLLIN,
+	CONN_STATE_SET_IN_VALUE		= (8 << 3) + EPOLLIN,
 } __attribute__((__packed__));
 
 /**
@@ -69,7 +72,10 @@ struct conn {
 		struct hlist_node hash_node;
 		struct hlist_node free_node;
 	};
-	unsigned char key[1 + CONFIG_KEY_SIZE_MAX];
+	union {
+		unsigned char key[1 + CONFIG_KEY_SIZE_MAX];
+		struct stats_res stats_res;
+	};
 } __attribute__((aligned(8)));
 /* alignment is required by loop_forever */
 

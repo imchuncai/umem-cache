@@ -36,6 +36,9 @@ struct thread {
 	bool __warmed_up;
 #endif
 
+	struct timespec stats_from;
+	struct stats stats;
+
 	struct memory memory;
 	struct hlist_head conn_free_list;
 	uint64_t s_lru_size;

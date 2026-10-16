@@ -42,6 +42,11 @@ Multilingual 多语言
 我们充分尊重用户的配置。我们对内存使用（包括哈希表的内存占用）进行精确控制，增加键值对的数量
 不会导致额外的内存消耗，并且哈希表的大小是根据管理的键值对的数量动态调整的。
 
+缓存淘汰算法
+----------
+
+缓存淘汰算法遵循 `S3-FIFO <https://s3fifo.com>`_ 算法。
+
 多线程
 ------
 
@@ -270,6 +275,35 @@ CMD-DEL
 	        [  1  ]
 
 	注意：[error]总是0
+
+CMD-STATS
+---------
+::
+
+	        [          IN           ]
+	[=CMD=] [stats_size] [  stats   ]
+	        [    4     ] [stats_size]
+
+	注意：[stats_size]可能会变，但只会增长
+	注意：[stats_size]变更历史: [76]
+
+==================  ======  ===================
+名称                 类型    意义
+==================  ======  ===================
+config_thread_nr    uint32
+config_tcp_timeout  uint32  以毫秒为单位
+config_max_conn     uint32
+config_mem_limit    uint64  以字节为单位
+version             uint64
+
+nanoseconds         uint64  服务器启动至今的纳秒数
+connects            uint64  已接受的连接数
+disconnects         uint64  已断开的连接数
+hits                uint64  命中数
+misses              uint64  未命中数
+dels                uint64  删除请求数
+==================  ======  ===================
+
 
 键分发
 =====

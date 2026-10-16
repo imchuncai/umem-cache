@@ -580,6 +580,8 @@ static void state_get_out_hit(struct thread *t, struct conn *conn)
 
 static void change_to_get_out_hit(struct thread *t, struct conn *conn)
 {
+	stats_hit(&t->stats);
+
 	conn->state = CONN_STATE_GET_OUT_HIT;
 	conn->unio = GET_RES_SIZE + conn->kv->val_size;
 	conn->size = htole64(conn->kv->val_size);
@@ -609,6 +611,8 @@ static void state_get_out_miss(struct thread *t, struct conn *conn)
 
 static void change_to_get_out_miss(struct thread *t, struct conn *conn)
 {
+	stats_miss(&t->stats);
+
 	conn->state = CONN_STATE_GET_OUT_MISS;
 	conn->unio = GET_RES_SIZE;
 	conn->miss = true;
@@ -636,6 +640,8 @@ static void cmd_get(struct thread *t, struct conn *conn)
 
 static void cmd_del(struct thread *t, struct conn *conn)
 {
+	stats_del(&t->stats);
+
 	struct hlist_node *node = hash_get(&t->hash_table, conn->key, &t->memory);
 	if (node == NULL) {
 	} else if (thread_range(node)) {
@@ -650,6 +656,46 @@ static void cmd_del(struct thread *t, struct conn *conn)
 	change_to_out_success(t, conn);
 }
 
+static void state_out_stats(struct thread *t, struct conn *conn)
+{
+	debug_printf("CONN_STATE_OUT_STATS:\n");
+
+	uint64_t written = sizeof(struct stats_res) - conn->unio;
+	if (conn_full_write(t, conn, conn->key + written))
+		change_to_in_cmd(conn);
+}
+
+static void cmd_stats(struct thread *t, struct conn *conn)
+{
+	conn->state = CONN_STATE_OUT_STATS;
+	conn->unio = sizeof(struct stats_res);
+
+	struct stats_res *res = &conn->stats_res;
+	res->size = htole32(sizeof(struct stats_res) - 4);
+	res->config_thread_nr = htole32(CONFIG_THREAD_NR);
+	res->config_tcp_timeout = htole32(CONFIG_TCP_TIMEOUT);
+	res->config_max_conn = htole32(CONFIG_MAX_CONN);
+	res->config_mem_limit = htole64(CONFIG_MEM_LIMIT);
+	res->version = htole64(CONFIG_VERSION);
+
+	struct timespec ts;
+	int ret __attribute__((unused)) = clock_gettime(CLOCK_BOOTTIME, &ts);
+	assert(ret == 0);
+	res->nanoseconds = (uint64_t)ts.tv_nsec - (uint64_t)t->stats_from.tv_nsec +
+		((uint64_t)ts.tv_sec - (uint64_t)t->stats_from.tv_sec) * 1000000000ULL;
+
+
+	res->stats = t->stats;
+	struct stats *s = &res->stats;
+	s->connects = htole64(s->connects);
+	s->disconnects = htole64(s->disconnects);
+	s->hits = htole64(s->hits);
+	s->misses = htole64(s->misses);
+	s->dels = htole64(s->dels);
+
+	state_out_stats(t, conn);
+}
+
 static void cmd_run(struct thread *t, struct conn *conn)
 {
 	enum cache_cmd cmd = *(conn->key - 1);
@@ -662,6 +708,11 @@ static void cmd_run(struct thread *t, struct conn *conn)
 	case CACHE_CMD_DEL:
 		debug_printf("CACHE_CMD_DEL: key_n: %u\n", conn->key[0]);
 		cmd_del(t, conn);
+		break;
+
+	case CACHE_CMD_STATS:
+		debug_printf("CACHE_CMD_STATS:\n");
+		cmd_stats(t, conn);
 		break;
 
 	default:
@@ -837,6 +888,9 @@ static void process_conn(struct thread *t, struct conn *conn)
 	case CONN_STATE_GET_OUT_HIT:
 		state_get_out_hit(t, conn);
 		break;
+	case CONN_STATE_OUT_STATS:
+		state_out_stats(t, conn);
+		break;
 
 	case CONN_STATE_GET_OUT_MISS:
 		state_get_out_miss(t, conn);
@@ -863,11 +917,14 @@ void thread_dispatch(uint32_t id, int fd)
 
 static void thread_accept(struct thread *t, int fd)
 {
+	stats_connected(&t->stats);
 	struct conn *conn = conn_malloc(t, fd);
-	if (conn)
+	if (conn) {
 		epoll_mod(t->epfd, fd, (uint64_t)conn);
-	else
+	} else {
+		stats_disconnected(&t->stats);
 		close(fd);
+	}
 }
 
 static void clock_service(struct thread *t, int timerfd)
@@ -923,6 +980,8 @@ static void grab_epoll_events(struct thread *t)
 
 	struct hlist_node *curr, *temp;
 	hlist_for_each_safe(curr, temp, &t->conn_free_list) {
+		stats_disconnected(&t->stats);
+
 		struct conn *conn = container_of(curr, struct conn, free_node);
 		close(conn->fd);
 		fixed_mem_cache_free(&t->conn_cache, conn);
@@ -971,6 +1030,7 @@ static bool thread_init(struct thread *t)
 #ifdef CONFIG_RAFT
 	t->__warmed_up = false;
 #endif
+	stats_init(&t->stats);
 	memory_init(&t->memory, THREAD_MAX_MEM >> PAGE_SHIFT);
 	hlist_head_init(&t->conn_free_list);
 	t->s_lru_size = 0;
@@ -982,7 +1042,8 @@ static bool thread_init(struct thread *t)
 	fixed_mem_cache_init(&t->conn_cache, t->__conns, sizeof(struct conn),
 							THREAD_MAX_CONN);
 
-	return thread_create_clock_service(t) &&
+	return clock_gettime(CLOCK_BOOTTIME, &t->stats_from) == 0 &&
+		thread_create_clock_service(t) &&
 		hash_table_init(&t->hash_table, &t->memory);
 }
 

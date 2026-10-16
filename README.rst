@@ -53,6 +53,11 @@ number of key-value pairs does not lead to additional memory consumption, and
 the size of the hash table is dynamically adjusted based on the number of
 key-value pairs managed.
 
+Eviction Algorithm
+------------------
+
+The cache eviction algorithm follows the `S3-FIFO <https://s3fifo.com>`_ algorithm.
+
 Multi-threaded
 --------------
 
@@ -287,6 +292,34 @@ CMD-DEL
 	        [  1  ]
 
 	Note: [error] is always 0
+
+CMD-STATS
+---------
+::
+
+	        [          IN           ]
+	[=CMD=] [stats_size] [  stats   ]
+	        [    4     ] [stats_size]
+
+	Note: [stats_size] may change but is guarantee to increase
+	Note: [stats_size] history: [76]
+
+==================  ======  ================================
+Name                Type    Meaning
+==================  ======  ================================
+config_thread_nr    uint32
+config_tcp_timeout  uint32  in milliseconds
+config_max_conn     uint32
+config_mem_limit    uint64  in bytes
+version             uint64
+
+nanoseconds         uint64  nanoseconds since server startup
+connects            uint64  number of accepted connections
+disconnects         uint64  number of disconnect connections
+hits                uint64  number of hits
+misses              uint64  number of misses
+dels                uint64  number of delete requests
+==================  ======  ================================
 
 Key Dispatch
 ============

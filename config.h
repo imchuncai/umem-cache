@@ -38,6 +38,10 @@
 
 /***************************** CONFIGURABLE END *******************************/
 
+#ifndef CONFIG_VERSION
+#define CONFIG_VERSION 0
+#endif
+
 /* (in bytes) */
 #define CONFIG_KEY_SIZE_MAX	UINT8_MAX
 #define CACHE_LINE_SIZE		128

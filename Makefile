@@ -14,6 +14,7 @@ targets += memory.c
 targets += murmur_hash3.c
 targets += slab.c
 targets += socket.c
+targets += stats.c
 targets += thread.c
 
 ifdef DEBUG
