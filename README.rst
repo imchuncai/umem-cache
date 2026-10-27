@@ -8,7 +8,7 @@ Umem-cache
 Umem-cache is a user-space key-value cache. Its goal is to be the best in the world.
 
 In benchmark tests with Zipf-based distribution and KV size within 1KB,
-Umem-cache achieved a 10% higher hit rate and 55% higher hit throughput,
+Umem-cache achieved a 10% higher hit rate and 50% higher hit throughput,
 while reducing P90 latency by over 50% and P99.9 latency by over 40%
 compared to Memcached and Redis.
 
@@ -150,7 +150,7 @@ Client Protocol (Build With Raft)
 - Client should connect to the server using tcp over ipv6
 - Client should use admin port(running_port + 1), if the proto is tagged (ADMIN)
 - Check `raft_proto.h <https://github.com/imchuncai/umem-cache/tree/master/raft_proto.h>`_ for command code
-- Check `cluster_cache_flow.txt <https://github.com/imchuncai/umem-cache/tree/master/Documentation/cluster_cache_flow.txt>`_ for cache flow
+- Check `consistency.rst <https://github.com/imchuncai/umem-cache/tree/master/Documentation/consistency.rst>`_ for cache workflow
 
 CONNECT
 -------
