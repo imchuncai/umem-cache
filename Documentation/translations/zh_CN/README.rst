@@ -21,7 +21,7 @@ Multilingual 多语言
 强一致
 ------
 
-缓存数据能够与后端数据库保持完全同步。换言之，你不会取到旧数据。
+缓存数据能够与后端数据库保持完全同步。换言之，你不会取到旧数据。请查看 `consistency.rst <https://github.com/imchuncai/umem-cache/tree/master/Documentation/translations/zh_CN/consistency.rst>`_
 
 反缓存击穿
 ---------

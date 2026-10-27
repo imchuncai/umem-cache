@@ -27,6 +27,8 @@ The cached data is fully synchronized with the backend database.
 
 In other words, you won't get staled data.
 
+See `consistency.rst <https://github.com/imchuncai/umem-cache/tree/master/Documentation/consistency.rst>`_ .
+
 Anti-dogpiling
 --------------
 
