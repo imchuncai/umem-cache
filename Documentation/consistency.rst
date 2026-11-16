@@ -68,14 +68,14 @@ even if it fails, it's not a big deal.
 	       return miss      |
 	|<----------------------|
 
-                             get key
-        |--------------------------------------------->|
+	                     get key
+	|--------------------------------------------->|
 	                                               | 2. wait read lock
-		           return value                |
+	                   return value                |
 	|<---------------------------------------------|
 
 
-        |---------------------->| 3. set value
+	|---------------------->| 3. set value
 	                        | 4. unlock key
 
 Update Or Delete
@@ -91,14 +91,14 @@ waiting in th queue.
 ::
 
 	client              Umem-cache              Database
-               
+
 	|--------------------------------------------->| 1. start transaction
 	                                               | 2. lock key for update
 	|<---------------------------------------------| 3. update or delete key
 
-               delete key
-	|---------------------->| 4. delete key or close the connection that	    
-        |<----------------------|    holds the lock
+	       delete key
+	|---------------------->| 4. delete key or close the connection that
+	|<----------------------|    holds the lock
 
 	|--------------------------------------------->| 5. commit transaction
 

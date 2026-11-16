@@ -49,6 +49,7 @@ struct server {
 			bool available;
 		} leader;
 		struct {
+			bool pre_vote;
 			int32_t required_old_votes;
 			int32_t required_new_votes;
 		} candidate;
@@ -117,9 +118,13 @@ static bool leader_log_commited(struct server *s)
 			new_commited += MEMBER_IN_NEW(m->type);
 		}
 	}
-	/* Note: we ignored leader warm up status for easy program */
-	return old_commited >= cl->require_old_votes &&
-	       new_commited >= cl->require_new_votes;
+
+	if (s->log->type != LOG_TYPE_GROW_TRANSFORM) {
+		return old_commited >= cl->require_old_votes &&
+		       new_commited >= cl->require_new_votes;
+	}
+
+	return old_commited + threads_warmed_up() >= cl->require_old_votes + 1;
 }
 
 static void reset_timer(struct server *s)
@@ -338,14 +343,18 @@ static void state_vote_out(struct raft_conn *conn)
 		change_to_in_cmd(conn);
 }
 
-static void change_to_vote_out(struct server *s, struct raft_conn *conn, bool grant)
+static void change_to_vote_out(
+	struct server *s, struct raft_conn *conn, bool grant, bool pre_vote)
 {
-	debug_printf("term: %ld voted for: %d\n",
+	if (!pre_vote) {
+		debug_printf("term: %ld voted for: %d\n",
 			s->term, grant ? s->follower.voted_for : 0);
+	}
 
 	struct request_vote_res *res = &conn->request_vote_res;
 	res->term = htole64(s->term);
 	res->granted = grant;
+	res->pre_vote = pre_vote;
 
 	raft_conn_set_io(conn, RAFT_CONN_STATE_VOTE_OUT, sizeof(*res));
 	state_vote_out(conn);
@@ -353,6 +362,13 @@ static void change_to_vote_out(struct server *s, struct raft_conn *conn, bool gr
 
 static void state_vote_in(struct server *s, struct raft_conn *conn)
 {
+	struct request_vote_req *req = &conn->request_vote_req;
+	bool pre_vote = req->pre_vote;
+	uint32_t candidate_id = le32toh(req->candidate_id);
+	uint64_t term = le64toh(req->term);
+	uint64_t log_index = le64toh(req->log_index);
+	uint64_t log_term = le64toh(req->log_term);
+
 	/**
 	 * RAFT: 6
 	 * if a server receives a RequestVote RPC within
@@ -361,15 +377,9 @@ static void state_vote_in(struct server *s, struct raft_conn *conn)
 	 */
 	if (s->state == SERVER_STATE_LEADER ||
 	   (s->state == SERVER_STATE_FOLLOWER && s->follower.leader != 0)) {
-		change_to_vote_out(s, conn, false);
+		change_to_vote_out(s, conn, false, pre_vote);
 		return;
 	}
-
-	struct request_vote_req *req = &conn->request_vote_req;
-	uint32_t candidate_id = le32toh(req->candidate_id);
-	uint64_t term = le64toh(req->term);
-	uint64_t log_index = le64toh(req->log_index);
-	uint64_t log_term = le64toh(req->log_term);
 
 	if (term > s->term)
 		server_increase_term(s, term);
@@ -380,50 +390,23 @@ static void state_vote_in(struct server *s, struct raft_conn *conn)
 	 * 2. If votedFor is null or candidateId, and candidate’s log is at
 	 * least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
 	 */
-	if (s->state == SERVER_STATE_FOLLOWER && term >= s->term &&
-		(s->follower.voted_for == 0 ||
-		 s->follower.voted_for == candidate_id) &&
-		log_at_least_up_to_date(s->log, log_index, log_term)) {
-		assert(s->follower.leader == 0);
-		reset_timer(s);
-		s->follower.voted_for = candidate_id;
-		change_to_vote_out(s, conn, true);
-	} else {
-		change_to_vote_out(s, conn, false);
-	}
-}
+	if (term + pre_vote >= s->term && log_at_least_up_to_date(s->log, log_index, log_term)) {
+		if (pre_vote) {
+			bool grant = s->state == SERVER_STATE_FOLLOWER || s->candidate.pre_vote;
+			change_to_vote_out(s, conn, grant, true);
+			return;
+		}
 
-static void state_request_vote_in(struct server *s, struct raft_conn *conn)
-{
-	debug_printf("RAFT_CONN_STATE_REQUEST_VOTE_IN:\n");
-
-	if (!raft_conn_full_read_to_buffer(conn, false, sizeof(struct request_vote_res)))
-		return;
-
-	struct request_vote_res *res = &conn->request_vote_res;
-	uint64_t term = le64toh(res->term);
-	bool vote_granted = res->granted;
-
-	raft_conn_change_to_ready_for_use(conn);
-
-	if (term > s->term) {
-		server_increase_term(s, term);
-		return;
-	}
-
-	if (s->state == SERVER_STATE_CANDIDATE && s->term == term && vote_granted) {
-		struct member *m = container_of(conn, struct member, conn);
-		s->candidate.required_old_votes -= MEMBER_IN_OLD(m->type);
-		s->candidate.required_new_votes -= MEMBER_IN_NEW(m->type);
-
-		debug_printf("vote granted, still require: %d, %d\n",
-				s->candidate.required_old_votes,
-				s->candidate.required_new_votes);
-		if (s->candidate.required_old_votes <= 0 &&
-		    s->candidate.required_new_votes <= 0) {
-			win_election(s);
+		if (s->state == SERVER_STATE_FOLLOWER && (s->follower.voted_for == 0 ||
+		     s->follower.voted_for == candidate_id)) {
+			assert(s->follower.leader == 0);
+			reset_timer(s);
+			s->follower.voted_for = candidate_id;
+			change_to_vote_out(s, conn, true, false);
+			return;
 		}
 	}
+	change_to_vote_out(s, conn, false, pre_vote);
 }
 
 static void change_to_request_vote_in(struct raft_conn *conn)
@@ -446,6 +429,7 @@ static void change_to_request_vote_out(struct server *s, struct raft_conn *conn)
 
 	struct request_vote_req *req = &conn->request_vote_req;
 	req->cmd = RAFT_CMD_REQUEST_VOTE;
+	req->pre_vote = s->candidate.pre_vote;
 	req->candidate_id = htole32(s->id);
 	req->term = htole64(s->term);
 	req->log_index = htole64(s->log->index);
@@ -584,6 +568,7 @@ static bool state_authority_in(struct server *s, struct raft_conn *conn) {
 				break;
 		}
 	}
+	debug_printf("RAFT_CONN_STATE_AUTHORITY_IN: %lu\n", k);
 
 	// Note: don't check (n > 0), make it faster
 	conn->authority_pending_nr += k;
@@ -810,12 +795,72 @@ static void change_to_heartbeat_out(struct server *s, struct raft_conn *conn)
 static void change_to_append_entry_out(struct server *s, struct member *member)
 {
 	assert(s->state == SERVER_STATE_LEADER);
-	member->append_entry_round = s->leader.replicate_entry_round;
+	if (member->append_entry_round <= s->leader.replicate_entry_round) {
+		member->append_entry_round = s->leader.replicate_entry_round;
+		if (member->next_index <= s->log->index)
+			change_to_append_log_out(s, member);
+		else
+			change_to_heartbeat_out(s, &member->conn);
+	}
+}
 
-	if (member->next_index <= s->log->index)
-		change_to_append_log_out(s, member);
-	else
-		change_to_heartbeat_out(s, &member->conn);
+static void state_request_vote_in(struct server *s, struct raft_conn *conn)
+{
+	debug_printf("RAFT_CONN_STATE_REQUEST_VOTE_IN:\n");
+
+	if (!raft_conn_full_read_to_buffer(conn, false, sizeof(struct request_vote_res)))
+		return;
+
+	struct request_vote_res *res = &conn->request_vote_res;
+	uint64_t term = le64toh(res->term);
+	bool vote_granted = res->granted;
+	bool pre_vote = res->pre_vote;
+
+	if (term > s->term) {
+		server_increase_term(s, term);
+		return;
+	}
+
+	if (s->state == SERVER_STATE_LEADER) {
+		struct member *m = container_of(conn, struct member, conn);
+		change_to_append_entry_out(s, m);
+		return;
+	}
+
+	assert(s->state == SERVER_STATE_CANDIDATE);
+	if (s->candidate.pre_vote != pre_vote) {
+		assert(pre_vote);
+		change_to_request_vote_out(s, conn);
+		return;
+	}
+
+	conn->state = RAFT_CONN_STATE_READY_FOR_USE;
+	if (!vote_granted)
+		return;
+
+	struct member *m = container_of(conn, struct member, conn);
+	s->candidate.required_old_votes -= MEMBER_IN_OLD(m->type);
+	s->candidate.required_new_votes -= MEMBER_IN_NEW(m->type);
+
+	debug_printf("pre-vote: %d, vote granted, still require: %d, %d\n",
+		s->candidate.pre_vote, s->candidate.required_old_votes,
+		s->candidate.required_new_votes);
+
+	if (s->candidate.required_old_votes <= 0 &&
+	    s->candidate.required_new_votes <= 0) {
+		if (pre_vote) {
+			s->term++;
+			s->candidate.pre_vote = false;
+			for (uint64_t i = 0; i < s->cluster->members_n; i++) {
+				struct raft_conn *conn;
+				conn = &s->cluster->members[i].conn;
+				if (conn->state == RAFT_CONN_STATE_READY_FOR_USE)
+					change_to_request_vote_out(s, conn);
+			}
+		} else {
+			win_election(s);
+		}
+	}
 }
 
 static void state_append_entry_in(struct server *s, struct raft_conn *conn)
@@ -830,8 +875,6 @@ static void state_append_entry_in(struct server *s, struct raft_conn *conn)
 	uint64_t term = le64toh(res->term);
 	bool applied = res->applied;
 
-	raft_conn_change_to_ready_for_use(conn);
-
 	if (term > s->term) {
 		server_increase_term(s, term);
 		return;
@@ -840,15 +883,17 @@ static void state_append_entry_in(struct server *s, struct raft_conn *conn)
 	// Note: once leader steps down, we will stop process outgoing
 	// connections in this epoll round.
 	assert(term == s->term && s->state == SERVER_STATE_LEADER);
+	conn->state = RAFT_CONN_STATE_READY_FOR_USE;
 
 	struct member *m = container_of(conn, struct member, conn);
-	m->responded_append_entry = true;
+	m->append_entry_round++;
+	m->responded_heartbeat = true;
 	if (state == RAFT_CONN_STATE_APPEND_LOG_IN)
 		m->next_index++;
 
 	if (applied && !member_commited_log(s, m)) {
 		convert_to_follower(s);
-	} else if (m->append_entry_round == s->leader.replicate_entry_round) {
+	} else if (m->append_entry_round > s->leader.replicate_entry_round) {
 		s->leader.commit_entry_required_old_votes -= MEMBER_IN_OLD(m->type);
 		s->leader.commit_entry_required_new_votes -= MEMBER_IN_NEW(m->type);
 	} else {
@@ -1145,11 +1190,11 @@ static void state_in_cmd(struct server *s, struct raft_conn *conn)
 
 static void change_to_ready_for_use(struct server *s, struct raft_conn *conn)
 {
+	conn->state = RAFT_CONN_STATE_READY_FOR_USE;
 	switch (s->state) {
 	case SERVER_STATE_LEADER:
 		struct member *m = container_of(conn, struct member, conn);
-		if (!m->responded_append_entry)
-			change_to_append_entry_out(s, m);
+		change_to_append_entry_out(s, m);
 		break;
 	case SERVER_STATE_CANDIDATE:
 		change_to_request_vote_out(s, conn);
@@ -1186,7 +1231,7 @@ static void state_tls_client_handshake(struct server *s, struct raft_conn *conn)
 		tls_deinit(&conn->session);
 		change_to_ready_for_use(s, conn);
 	} else if (ret != GNUTLS_E_AGAIN) {
-		raft_conn_clear(conn);
+		raft_conn_reset(conn);
 	} else if (tls_record_require_write(&conn->session)) {
 		conn->state = RAFT_CONN_STATE_TLS_CLIENT_HANDSHAKE_OUT;
 	} else {
@@ -1203,7 +1248,7 @@ static void change_to_conn_established(struct server *s, struct raft_conn *conn)
 		conn->state = RAFT_CONN_STATE_TLS_CLIENT_HANDSHAKE_OUT;
 		state_tls_client_handshake(s, conn);
 	} else {
-		raft_conn_clear(conn);
+		raft_conn_reset(conn);
 	}
 }
 #else
@@ -1223,7 +1268,7 @@ static void state_in_progress(struct server *s, struct raft_conn *conn)
 	if (ret == 0 && optval == 0)
 		change_to_conn_established(s, conn);
 	else
-		raft_conn_clear(conn);
+		raft_conn_reset(conn);
 }
 
 static void member_connect(struct server *s, struct member *m)
@@ -1296,18 +1341,17 @@ static void replicate_entry(struct server *s)
 
 	for (uint32_t i = 0; i < cl->members_n; i++) {
 		struct member *m = cl->members + i;
-		m->responded_append_entry = false;
-		switch (m->conn.state) {
-		case RAFT_CONN_STATE_READY_FOR_USE:
+		if (m->conn.state == RAFT_CONN_STATE_READY_FOR_USE)
 			change_to_append_entry_out(s, m);
-			break;
-		case RAFT_CONN_STATE_NOT_CONNECTED:
+		else if (m->conn.state == RAFT_CONN_STATE_NOT_CONNECTED)
 			member_connect(s, m);
-			break;
-		default:
-			break;
-		}
 	}
+}
+
+static void reset_conn(struct server *s, struct raft_conn *conn)
+{
+	raft_conn_change_to_wait_reset(conn);
+	epoll_mod(s->epfd, conn->fd, (uint64_t)conn);
 }
 
 /**
@@ -1339,7 +1383,7 @@ static void convert_to_candidate(struct server *s)
 	assert(s->state == SERVER_STATE_CANDIDATE);
 
 	struct cluster *cl = s->cluster;
-	s->term++;
+	s->candidate.pre_vote = true;
 	s->candidate.required_old_votes = cl->require_old_votes;
 	s->candidate.required_new_votes = cl->require_new_votes;
 	reset_timer_hard(s);
@@ -1347,16 +1391,12 @@ static void convert_to_candidate(struct server *s)
 
 	for (uint64_t i = 0; i < cl->members_n; i++) {
 		struct member *m = cl->members + i;
-		switch (m->conn.state) {
-		case RAFT_CONN_STATE_READY_FOR_USE:
+		if (m->conn.state == RAFT_CONN_STATE_READY_FOR_USE)
 			change_to_request_vote_out(s, &m->conn);
-			break;
-		case RAFT_CONN_STATE_NOT_CONNECTED:
+		else if (m->conn.state == RAFT_CONN_STATE_NOT_CONNECTED)
 			member_connect(s, m);
-			break;
-		default:
-			break;
-		}
+		else
+			reset_conn(s, &m->conn);
 	}
 }
 
@@ -1378,11 +1418,11 @@ static bool leader_timer_ticked(struct server *s)
 	uint32_t new_available = 0;
 	for (uint64_t i = 0; i < cl->members_n; i++) {
 		struct member *m = cl->members + i;
-		if (m->responded_append_entry == m->available) {
+		if (m->responded_heartbeat == m->available) {
 			m->unstable_round = 0;
 		} else {
 			m->unstable_round++;
-			if (m->unstable_round >= 10) {
+			if (m->unstable_round >= 20) {
 				m->available = !m->available;
 				m->unstable_round = 0;
 				available_changed = true;
@@ -1393,17 +1433,18 @@ static bool leader_timer_ticked(struct server *s)
 			old_available += MEMBER_IN_OLD(m->type);
 			new_available += MEMBER_IN_NEW(m->type);
 		}
+
+		if (m->conn.state == RAFT_CONN_STATE_NOT_CONNECTED)
+			member_connect(s, m);
+		else if (!m->responded_heartbeat && !m->available)
+			reset_conn(s, &m->conn);
+
+		m->responded_heartbeat = false;
 	}
 
 	if (old_available < cl->require_old_votes ||
 	    new_available < cl->require_new_votes) {
 		return false;
-	}
-
-	for (uint64_t i = 0; i < cl->members_n; i++) {
-		struct member *m = cl->members + i;
-		if (m->conn.state == RAFT_CONN_STATE_NOT_CONNECTED)
-			member_connect(s, m);
 	}
 
 	if ((s->log->type & LOG_TYPE_UNSTABLE_MASK) == 0 && available_changed) {
@@ -1513,6 +1554,7 @@ static void process(struct server *s, struct raft_conn *conn)
 		state_authority_in(s, conn);
 		break;
 	case RAFT_CONN_STATE_NOT_CONNECTED:
+	case RAFT_CONN_STATE_WAIT_RESET:
 	case RAFT_CONN_STATE_READY_FOR_USE:
 	case RAFT_CONN_OUTGOING_INCOMING_DIVIDER:
 	case RAFT_CONN_STATE_AUTHORITY_DIVIDER:
@@ -1576,11 +1618,16 @@ static void loop_forever(struct server *s, int fd, int admin_fd, in_port_t port)
 
 				if (events[i].events & ~(EPOLLIN | EPOLLOUT)) {
 					if (raft_conn_outgoing(conn))
-						raft_conn_clear(conn);
+						raft_conn_reset(conn);
 					else
 						raft_conn_free(conn);
 				} else if (events[i].events & conn->state) {
 					process(s, conn);
+				} else if (conn->state == RAFT_CONN_STATE_WAIT_RESET) {
+					raft_conn_complete_reset(conn);
+					struct member *m;
+					m = container_of(conn, struct member, conn);
+					member_connect(s, m);
 				}
 			}
 		}

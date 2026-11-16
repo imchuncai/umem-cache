@@ -80,11 +80,6 @@ void raft_conn_return_log(struct raft_conn *conn)
 	log_return(conn->log);
 }
 
-void raft_conn_change_to_ready_for_use(struct raft_conn *conn)
-{
-	conn->state = RAFT_CONN_STATE_READY_FOR_USE;
-}
-
 bool raft_conn_outgoing(struct raft_conn *conn)
 {
 	return conn->state < RAFT_CONN_OUTGOING_INCOMING_DIVIDER;
@@ -108,9 +103,8 @@ void raft_conn_free(struct raft_conn *conn)
 	free(conn);
 }
 
-void raft_conn_clear(struct raft_conn *conn)
+void raft_conn_change_to_wait_reset(struct raft_conn *conn)
 {
-	debug_printf("raft_conn_clear:\n");
 	assert(raft_conn_outgoing(conn));
 	assert(conn->state != RAFT_CONN_STATE_NOT_CONNECTED);
 
@@ -121,8 +115,21 @@ void raft_conn_clear(struct raft_conn *conn)
 		tls_deinit(&conn->session);
 #endif
 
+	conn->state = RAFT_CONN_STATE_WAIT_RESET;
+}
+
+void raft_conn_complete_reset(struct raft_conn *conn)
+{
 	conn->state = RAFT_CONN_STATE_NOT_CONNECTED;
 	close(conn->fd);
+}
+
+void raft_conn_reset(struct raft_conn *conn)
+{
+	debug_printf("raft_conn_reset:\n");
+
+	raft_conn_change_to_wait_reset(conn);
+	raft_conn_complete_reset(conn);
 }
 
 static bool conn_check_read(struct raft_conn *conn, bool in, ssize_t n)
@@ -137,7 +144,7 @@ static bool conn_check_read(struct raft_conn *conn, bool in, ssize_t n)
 		if (in)
 			raft_conn_free(conn);
 		else
-			raft_conn_clear(conn);
+			raft_conn_reset(conn);
 	}
 	return false;
 }
@@ -188,7 +195,7 @@ static bool conn_check_write(struct raft_conn *conn, bool in, ssize_t n)
 		if (in)
 			raft_conn_free(conn);
 		else
-			raft_conn_clear(conn);
+			raft_conn_reset(conn);
 	}
 	return false;
 }
@@ -273,7 +280,7 @@ bool raft_conn_write_byte_zero(struct raft_conn *conn, bool in)
 		if (in)
 			raft_conn_free(conn);
 		else
-			raft_conn_clear(conn);
+			raft_conn_reset(conn);
 	}
 	return false;
 }

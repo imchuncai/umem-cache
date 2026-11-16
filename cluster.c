@@ -51,7 +51,7 @@ void cluster_free(struct cluster *cl)
 		struct member *m = cl->members + i;
 		struct raft_conn *conn = &m->conn;
 		if (conn->state != RAFT_CONN_STATE_NOT_CONNECTED)
-			raft_conn_clear(conn);
+			raft_conn_reset(conn);
 	}
 	free(cl);
 }

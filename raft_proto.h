@@ -27,6 +27,7 @@ static_assert(RAFT_CMD_CONNECT == 0);
 
 struct request_vote_req {
 	enum raft_cmd cmd;
+	bool pre_vote;
 	uint32_t candidate_id;
 	uint64_t term;
 	uint64_t log_index;
@@ -36,6 +37,7 @@ struct request_vote_req {
 struct request_vote_res {
 	uint64_t term;
 	bool granted;
+	bool pre_vote;
 } __attribute__((aligned(8)));
 
 struct append_log_req {

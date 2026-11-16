@@ -179,9 +179,13 @@ REQUEST-VOTE (INTERNAL)
 -----------------------
 ::
 
-	[                              OUT                              ] [      IN      ]
-	[command] [reserved] [candidate-id] [term] [log-index] [log-term] [term] [granted]
-	[   1   ] [   3    ] [     4      ] [ 8  ] [    8    ] [   8    ] [ 8  ] [   1   ]
+	[                                   OUT                                    ]
+	[command] [pre-vote] [reserved] [candidate-id] [term] [log-index] [log-term]
+	[   1   ] [   1    ] [   2    ] [     4      ] [ 8  ] [    8    ] [   8    ]
+
+	[                 IN                 ]
+	[term] [granted] [pre-vote] [reserved]
+	[ 8  ] [   1   ] [   1    ] [   6    ]
 
 APPEND-LOG (INTERNAL)
 ---------------------
@@ -195,17 +199,17 @@ APPEND-LOG (INTERNAL)
 	[log-index] [log-term] [version] [next-machine-version] [next-machine-id]
 	[    8    ] [   8    ] [   8   ] [         8          ] [       4       ]
 
-	[                        OUT                         ] [      IN      ]
-	[new-machine-nr] [distinct_machines_n] [   machines  ] [term] [applied]
-	[      4       ] [         8         ] [=MACHINE= * n] [ 8  ] [   1   ]
+	[                        OUT                         ] [           IN            ]
+	[new-machine-nr] [distinct_machines_n] [   machines  ] [term] [applied] [reserved]
+	[      4       ] [         8         ] [=MACHINE= * n] [ 8  ] [   1   ] [   7    ]
 
 HEARTBEAT / LOG-APPLIED-CHECK (INTERNAL)
 ----------------------------------------
 ::
 
-	[          OUT            ] [      IN      ]
-	[command] [reserved] [term] [term] [applied]
-	[   1   ] [   7    ] [ 8  ] [ 8  ] [   1   ]
+	[          OUT            ] [           IN            ]
+	[command] [reserved] [term] [term] [applied] [reserved]
+	[   1   ] [   7    ] [ 8  ] [ 8  ] [   1   ] [   7    ]
 
 INIT-CLUSTER / CHANGE-CLUSTER (ADMIN)
 -------------------------------------

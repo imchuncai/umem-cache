@@ -19,7 +19,8 @@ struct member {
 	in_port_t sin6_port;
 	struct in6_addr sin6_addr;
 	bool available;
-	bool responded_append_entry;
+
+	bool responded_heartbeat;
 
 	struct raft_conn conn;
 	uint64_t append_entry_round;

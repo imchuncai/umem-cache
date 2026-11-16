@@ -38,8 +38,9 @@ static void init_member(struct member *m, const struct machine *machine, unsigne
 	m->sin6_port = machine->sin6_port;
 	m->sin6_addr = machine->sin6_addr;
 	m->available = machine_available(machine);
-	m->responded_append_entry = false;
+	m->responded_heartbeat = true;
 	raft_out_conn_init(&m->conn);
+	m->append_entry_round = 0;
 	m->next_index = 0;
 	m->match_index = 0;
 }
