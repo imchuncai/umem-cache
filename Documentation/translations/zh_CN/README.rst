@@ -265,7 +265,7 @@ CMD-GET-OR-SET
 --------------
 ::
 
-	                           [[hit] == 0] [      [hit] == 1       ]
+	                           [[hit] == 1] [      [hit] == 0       ]
 	        [       IN       ] [    IN    ] [          OUT          ]
 	[=CMD=] [value-size] [hit] [  value   ] [value-size] [  value   ]
 	        [    8     ] [ 1 ] [value-size] [    8     ] [value-size]

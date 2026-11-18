@@ -990,7 +990,7 @@ static void state_change_cluster_in(struct server *s, struct raft_conn *conn)
 	    log_complete_change(log, s->log, s->term)) {
 		leader_replace_log(s, log);
 
-	#ifdef TEST_VOTE_WITH_LOG0
+	#ifdef TEST_VOTE_WITH_CHANGE_LOG
 		convert_to_follower(s);
 	#endif
 	}

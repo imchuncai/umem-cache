@@ -585,7 +585,7 @@ static void change_to_get_out_hit(struct thread *t, struct conn *conn)
 	conn->state = CONN_STATE_GET_OUT_HIT;
 	conn->unio = GET_RES_SIZE + conn->kv->val_size;
 	conn->size = htole64(conn->kv->val_size);
-	conn->miss = false;
+	conn->hit = true;
 	state_get_out_hit(t, conn);
 }
 
@@ -615,7 +615,7 @@ static void change_to_get_out_miss(struct thread *t, struct conn *conn)
 
 	conn->state = CONN_STATE_GET_OUT_MISS;
 	conn->unio = GET_RES_SIZE;
-	conn->miss = true;
+	conn->hit = false;
 	state_get_out_miss(t, conn);
 }
 

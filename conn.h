@@ -54,7 +54,7 @@ struct conn {
 		unsigned char buffer[GET_RES_SIZE];
 		struct {
 			uint64_t size;
-			bool miss;
+			bool hit;
 
 			enum conn_state state;
 			bool clock_called;
