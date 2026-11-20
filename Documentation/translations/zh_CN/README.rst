@@ -21,7 +21,8 @@ Multilingual 多语言
 强一致
 ------
 
-缓存数据能够与后端数据库保持完全同步。换言之，你不会取到旧数据。请查看 `consistency.rst <https://github.com/imchuncai/umem-cache/tree/master/Documentation/translations/zh_CN/consistency.rst>`_
+缓存数据能够与后端数据库保持完全同步。换言之，你不会取到旧数据。请查看
+`consistency.rst <https://github.com/imchuncai/umem-cache/tree/master/Documentation/translations/zh_CN/consistency.rst>`_
 
 反缓存击穿
 ---------
@@ -108,6 +109,19 @@ TLS
 - 功能测试： `umem-cache-client-Go <https://github.com/imchuncai/umem-cache-client-Go>`_
 - 基准测试： `umem-cache-benchmark <https://github.com/imchuncai/umem-cache-benchmark>`_
 - 集群基准测试：计划推迟到2027年
+
+工具
+====
+
+`umem-cache-toy <https://github.com/imchuncai/umem-cache-toy>`_
+---------------------------------------------------------------
+
+一个用于体验Umem-cache的简易命令行工具。
+
+`umem-cache-ctl <https://github.com/imchuncai/umem-cache-ctl>`_
+---------------------------------------------------------------
+
+用于管理和操作Umem-cache的命令行工具。
 
 客户端协议
 =========
@@ -292,7 +306,7 @@ CMD-STATS
 	注意：[stats_size]变更历史: [76]
 
 ==================  ======  ===================
-名称                 类型    意义
+名称                 类型    描述
 ==================  ======  ===================
 config_thread_nr    uint32
 config_tcp_timeout  uint32  以毫秒为单位
@@ -314,8 +328,9 @@ dels                uint64  删除请求数
 
 我们采用客户端hash来分发键。
 
-客户端应该使用MurmurHash3_x64_128散列函数，种子设置为74,
-然后使用前64位散列结果当作小端序整数来分发键到指定线程，分发使用的算法为 `Lemire's reduction method <https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction>`_ .
+客户端应该使用MurmurHash3_x64_128散列函数，种子设置为74,并且以小端序处理输入数据。
+然后使用前64位散列结果来分发键到指定线程，分发使用的算法为
+`Lemire's reduction method <https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction>`_ .
 
 集群成员分发
 ----------
@@ -323,7 +338,7 @@ dels                uint64  删除请求数
 键在集群中与在单例中有所不同，在集群中它多一个8字节的版本号前缀，这个版本号为小端序编码。
 这个版本号不要传给散列函数。
 
-客户端应该使用MurmurHash3_x64_128散列函数，种子设置为74,
-然后使用后64位散列结果当作小端序整数来分发键到指定成员，分发使用的算法为位取模散列。
-键的版本号为该成员的版本号。如果该成员被标记为不可用，这个键应该被分发到下一个可用的成员上，
+客户端应该使用MurmurHash3_x64_128散列函数，种子设置为74,并且以小端序处理输入数据。
+然后使用后64位散列结果来分发键到指定成员，分发使用的算法为位取模散列。
+键的版本号为该成员的版本号，如果该成员被标记为不可用，这个键应该被分发到下一个可用的成员上，
 同时键的版本号保持不变。所有成员应该被视为呈环形排列。

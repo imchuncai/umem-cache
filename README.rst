@@ -128,6 +128,19 @@ Tests
 - benchmark  tests: `umem-cache-benchmark <https://github.com/imchuncai/umem-cache-benchmark>`_
 - cluster benchmark tests: the plan has been postponed to 2027
 
+Tools
+=====
+
+`umem-cache-toy <https://github.com/imchuncai/umem-cache-toy>`_
+---------------------------------------------------------------
+
+A toy CLI for experimenting with Umem-cache.
+
+`umem-cache-ctl <https://github.com/imchuncai/umem-cache-ctl>`_
+---------------------------------------------------------------
+
+A CLI tool for managing and operating Umem-cache.
+
 Client Protocol
 ===============
 
@@ -332,9 +345,10 @@ Key Dispatch
 
 We use client side hash to dispatch keys to threads.
 
-Client should use MurmurHash3_x64_128 with seed 74 as hash method, and use the
-first 64 bits of the hash value as a little-endian integer to dispatch keys to
-threads. The dispatch method is `Lemire's reduction method <https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction>`_ .
+Client should use MurmurHash3_x64_128 with seed 74 as hash method, and process
+the input data in little-endian byte order. Then use the first 64 bits of the
+hash value to dispatch keys to threads. The dispatch method is
+`Lemire's reduction method <https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction>`_ .
 
 Cluster Member Dispatch
 -----------------------
@@ -343,9 +357,10 @@ Keys in the cluster differ from those in the singleton, they have an 8-byte
 prefix version, and use little-endian byte order. This prefix version should
 not pass to the hash method.
 
-Client should use MurmurHash3_x64_128 with seed 74 as hash method, and use
-the second 64 bits of the hash value as a little-endian integer to dispatch keys
-to the members. The dispatch method is bitwise modulo. The key's version is the
-version of the member. If the member is unavailable, the key should be
-dispatched to the the next available member, and the version of the key should
-remain unchanged. And the members should be considered as arranged in a ring.
+Client should use MurmurHash3_x64_128 with seed 74 as hash method, and process
+the input data in little-endian byte order. Then use the second 64 bits of the
+hash value to dispatch keys to the members. The dispatch method is bitwise
+modulo. The key's version is the version of the member. If the member is
+unavailable, the key should be dispatched to the the next available member, and
+the version of the key should remain unchanged. And the members should be
+considered as arranged in a ring.
